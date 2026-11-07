@@ -17,7 +17,7 @@ android {
         targetSdk = 35
         // В GitHub Actions versionCode растёт с каждым запуском, локально = 1
         versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
-        versionName = "1.9.0"
+        versionName = "2.0.0"
         // Автообновление имеет смысл только у сборки, подписанной постоянным ключом (иначе Android не установит новую версию поверх)
         buildConfigField("boolean", "UPDATES_ENABLED", hasReleaseKey.toString())
     }
