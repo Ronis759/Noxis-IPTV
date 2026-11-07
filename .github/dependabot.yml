@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: "/"
+    schedule:
+      interval: weekly
+    ignore:
+      # Media3 1.9+ поднял minSdk до 23; пока поддерживаем Android 5 (minSdk 21), оставаемся на 1.8.x
+      - dependency-name: "androidx.media3:*"
+        versions: [">=1.9.0"]
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

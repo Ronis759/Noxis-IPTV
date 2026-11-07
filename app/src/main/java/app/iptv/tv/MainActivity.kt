@@ -40,58 +40,11 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.ui.PlayerView
-import java.io.File
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-
-class Row(val title: String, val sub: String = "", val tag: Any? = null, val dim: Boolean = false, val icon: String = "", val short: String = "")
-
-class RowAdapter(private val ctx: Context) : BaseAdapter() {
-    private var rows: List<Row> = emptyList()
-    var icons = false
-    var compact = false
-        set(v) { if (field != v) { field = v; notifyDataSetChanged() } }
-    var active = ""
-    fun set(r: List<Row>) { rows = r; notifyDataSetChanged() }
-    fun row(i: Int): Row = rows[i]
-    override fun getCount() = rows.size
-    override fun getItem(i: Int): Any = rows[i]
-    override fun getItemId(i: Int) = i.toLong()
-    override fun getView(i: Int, cv: View?, parent: ViewGroup?): View {
-        val d = ctx.resources.displayMetrics.density
-        fun px(x: Int) = (x * d).toInt()
-        val box = (cv as? LinearLayout) ?: LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(px(12), px(8), px(12), px(8))
-            addView(ImageView(ctx).apply { scaleType = ImageView.ScaleType.FIT_CENTER }, LinearLayout.LayoutParams(px(60), px(40)))
-            val lp = LinearLayout.LayoutParams(0, -2, 1f)
-            lp.leftMargin = px(12)
-            addView(LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL
-                addView(TextView(ctx).apply { textSize = 20f; maxLines = 1; ellipsize = TextUtils.TruncateAt.END })
-                addView(TextView(ctx).apply { textSize = 15f; maxLines = 1; setTextColor(0xFF8A9AA5.toInt()) })
-            }, lp)
-        }
-        val r = rows[i]
-        val img = box.getChildAt(0) as ImageView
-        img.visibility = if (icons) View.VISIBLE else View.GONE
-        Logos.load(img, r.icon)
-        val tx = box.getChildAt(1) as LinearLayout
-        val comp = compact
-        box.gravity = Gravity.CENTER_VERTICAL
-        (tx.getChildAt(0) as TextView).apply {
-            text = if (comp) r.short.ifEmpty { r.title.take(1).uppercase() } else r.title
-            textSize = if (comp) 24f else 20f
-            gravity = if (comp) Gravity.CENTER_HORIZONTAL else Gravity.START
-            setTextColor(if (r.title == active && active.isNotEmpty()) 0xFF6FE3C1.toInt() else if (r.dim) 0xFF8A9AA5.toInt() else Color.WHITE)
-        }
-        (tx.getChildAt(1) as TextView).apply { text = r.sub; visibility = if (r.sub.isEmpty() || comp) View.GONE else View.VISIBLE }
-        return box
-    }
-}
 
 class MainActivity : Activity() {
     private lateinit var player: ExoPlayer
@@ -156,8 +109,10 @@ class MainActivity : Activity() {
     private val G_ALL = "Все"
     private val G_FAV = "★ Избранное"
     private var grp = G_ALL
-    private var favs: MutableSet<String> = HashSet()          // избранные каналы (по названию), общие для всех плейлистов
-    private var hiddenGroups: MutableSet<String> = HashSet()  // скрытые группы (по названию)
+    private lateinit var favs: PrefSet           // избранные каналы (по Channel.okey), общие для всех плейлистов
+    private lateinit var hiddenGroups: PrefSet   // скрытые группы (по названию)
+    private lateinit var repo: Repository        // слой данных: серверы, плейлист, программа передач
+    private lateinit var updates: UpdateFlow
     private var zap: List<Channel> = emptyList()              // список, по которому листают ↑/↓ (группа, выбранная в панели)
     private var cur: Channel? = null
     private var arch: Prog? = null
@@ -267,8 +222,10 @@ class MainActivity : Activity() {
         root.addView(pv, FrameLayout.LayoutParams(-1, -1))
 
         panelDim = prefs.getInt("dim", 95).coerceIn(DIM_MIN, 100)
-        favs = HashSet(prefs.getStringSet("fav", emptySet()) ?: emptySet())
-        hiddenGroups = HashSet(prefs.getStringSet("hg", emptySet()) ?: emptySet())
+        repo = Repository(this, prefs)
+        updates = UpdateFlow(this, prefs) { toast(it) }
+        favs = PrefSet(prefs.getStringSet("fav", emptySet()) ?: emptySet()) { prefs.edit().putStringSet("fav", HashSet(it)).apply() }
+        hiddenGroups = PrefSet(prefs.getStringSet("hg", emptySet()) ?: emptySet()) { prefs.edit().putStringSet("hg", HashSet(it)).apply() }
         buildHud(); buildSeek(); buildPanels(); buildSetup(); buildServers(); buildGroupMgr(); buildToast()
         // тип архива по умолчанию — flussonic (один раз переводим и ранее сохранённое значение по умолчанию)
         if (prefs.getInt("ctv", 0) < 1) prefs.edit().putString("ct", "flussonic").putInt("ctv", 1).apply()
@@ -285,60 +242,7 @@ class MainActivity : Activity() {
                 loadAll()
             } else openSetup()
         } else loadAll()
-        checkUpdate(false)
-    }
-
-    /* ---------- обновление из GitHub Releases ---------- */
-    /** [manual] = false: тихая проверка при запуске (не чаще раза в 6 часов, молчит, если обновлений нет или сеть недоступна). */
-    private fun checkUpdate(manual: Boolean) {
-        val repo = getString(R.string.github_repo).trim()
-        if (repo.isEmpty()) { if (manual) toast("Не задан репозиторий: впишите github_repo в strings.xml"); return }
-        // Сборка не подписана постоянным ключом (локальная или CI без Secrets): новую версию поверх неё Android не установит — не предлагаем
-        if (!BuildConfig.UPDATES_ENABLED) {
-            if (manual) toast("Эта сборка подписана временным ключом — обновление поверх неё не установится. Подпишите APK своим ключом (см. README)")
-            return
-        }
-        if (!manual && now() - prefs.getLong("upd_t", 0) < 6 * 3600) return
-        if (manual) toast("Проверка обновлений…")
-        Thread {
-            try {
-                val info = Updater.fetch(repo)
-                prefs.edit().putLong("upd_t", now()).apply()
-                val mine = Updater.installedCode(this)
-                runOnUiThread {
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    if (info != null && info.code > mine) askUpdate(info, mine)
-                    else if (manual) toast("Установлена последняя версия ($mine)")
-                }
-            } catch (e: Exception) {
-                if (manual) runOnUiThread { toast("Не удалось проверить обновления: " + Iptv.safeMsg(e)) }
-            }
-        }.start()
-    }
-
-    private fun askUpdate(info: Updater.Info, mine: Long) {
-        android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("Доступна версия ${info.code}")
-            .setMessage("Установлена: $mine. Скачать и установить обновление?")
-            .setPositiveButton("Обновить") { _, _ -> downloadUpdate(info) }
-            .setNegativeButton("Позже", null)
-            .show()
-    }
-
-    private fun downloadUpdate(info: Updater.Info) {
-        toast("Загрузка обновления…")
-        Thread {
-            try {
-                val f = Updater.download(this, info)
-                runOnUiThread {
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    val err = Updater.install(this, f)
-                    if (err != null) toast(err)
-                }
-            } catch (e: Exception) {
-                runOnUiThread { toast("Не удалось скачать обновление: " + Iptv.safeMsg(e)) }
-            }
-        }.start()
+        updates.check(false)
     }
 
     /* ---------- интерфейс ---------- */
@@ -704,7 +608,7 @@ class MainActivity : Activity() {
                 }
             }
         }
-        val btUpd = small(tvButton("Проверить обновления")).apply { setOnClickListener { checkUpdate(true) } }
+        val btUpd = small(tvButton("Проверить обновления")).apply { setOnClickListener { updates.check(true) } }
         val btAbout = small(tvButton("О программе")).apply { setOnClickListener { showAbout() } }
 
         val left = card("Источник").apply {
@@ -866,11 +770,10 @@ class MainActivity : Activity() {
     }
 
     /* ---------- избранное и скрытые группы ---------- */
-    private fun isFav(c: Channel) = c.name in favs
+    private fun isFav(c: Channel) = c.okey in favs
 
     private fun toggleFav(c: Channel) {
-        if (!favs.remove(c.name)) favs.add(c.name)
-        prefs.edit().putStringSet("fav", HashSet(favs)).apply()
+        favs.toggle(c.okey)
         toast(if (isFav(c)) "★ В избранное: ${c.name}" else "Убрано из избранного: ${c.name}")
     }
 
@@ -883,9 +786,8 @@ class MainActivity : Activity() {
     }
 
     private fun toggleGroup(g: String) {
-        if (!hiddenGroups.remove(g)) hiddenGroups.add(g)
-        prefs.edit().putStringSet("hg", HashSet(hiddenGroups)).apply()
-        if (g in hiddenGroups && grp == g) grp = G_ALL
+        val hidden = hiddenGroups.toggle(g)
+        if (hidden && grp == g) grp = G_ALL
         zap = emptyList()
     }
 
@@ -1073,14 +975,6 @@ class MainActivity : Activity() {
         return c.ctype.ifEmpty { if (c.csrc.isNotEmpty()) "default" else ctype }
     }
 
-    private fun allServers(): List<Server> {
-        val l = ArrayList<Server>()
-        for (f in listOf(File(filesDir, "servers.txt"), File(getExternalFilesDir(null), "servers.txt"))) {
-            try { if (f.exists()) l += Iptv.parseServers(f.readText()) } catch (e: Exception) {}
-        }
-        return l.distinctBy { it.pl }
-    }
-
     private fun buildServers() {
         srvList = lv()
         srvPanel = LinearLayout(this).apply {
@@ -1143,7 +1037,7 @@ class MainActivity : Activity() {
     }
 
     private fun openServers() {
-        val l = allServers()
+        val l = repo.servers()
         if (l.isEmpty()) { toast("Список серверов пуст. Загрузите servers.txt кнопкой «Загрузить файл…»"); openSetup(); return }
         srvBackToSetup = setup.visibility == View.VISIBLE
         val act = prefs.getString("srvn", "") ?: ""
@@ -1172,24 +1066,23 @@ class MainActivity : Activity() {
         if (requestCode == 7 && resultCode == RESULT_OK && u != null) {
             Thread {
                 try {
-                    val t = contentResolver.openInputStream(u)!!.use { String(it.readBytes(), Charsets.UTF_8) }.removePrefix("\uFEFF")
-                    runOnUiThread { importText(t) }
+                    // тот же лимит и та же кодировка (UTF-8 / windows-1251, gzip, BOM), что и у сетевого плейлиста
+                    val bytes = (contentResolver.openInputStream(u) ?: throw IOException("нет доступа к файлу"))
+                        .use { Iptv.readLimited(it, Iptv.MAX_PLAYLIST) }
+                    val t = Iptv.text(bytes)
+                    val isPlaylist = repo.importText(t)
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        if (isPlaylist) { closePanels(); loadAll(true) }
+                        else if (Iptv.parseServers(t).isEmpty()) toast("В файле нет адресов. Формат: Название | http://… | EPG")
+                        else openServers()
+                    }
+                } catch (e: TooBigException) {
+                    runOnUiThread { toast("Файл слишком большой (лимит ${Iptv.MAX_PLAYLIST / 1048576} МБ)") }
                 } catch (e: Exception) {
                     runOnUiThread { toast("Не удалось прочитать файл") }
                 }
             }.start()
-        }
-    }
-
-    private fun importText(t: String) {
-        if (t.contains("#EXTINF")) {
-            File(filesDir, "local.m3u").writeText(t)
-            prefs.edit().putString("pl", "local").remove("srvn").apply()
-            closePanels()
-            loadAll(true)
-        } else {
-            File(filesDir, "servers.txt").writeText(t)
-            if (Iptv.parseServers(t).isEmpty()) toast("В файле нет адресов. Формат: Название | http://… | EPG") else openServers()
         }
     }
 
@@ -1202,15 +1095,9 @@ class MainActivity : Activity() {
         toast("Загрузка плейлиста…")
         Thread {
             try {
-                File(filesDir, "pl.m3u").delete()   // старый общий кэш: он не различал серверы
-                val f = File(filesDir, "pl_" + Integer.toHexString(pl.hashCode()) + ".m3u")
-                var cached = false
-                val txt = if (pl == "local") File(filesDir, "local.m3u").readText()
-                else try { Iptv.text(Iptv.http(pl)).also { f.writeText(it) } }
-                catch (e: Exception) { if (f.exists()) { cached = true; f.readText() } else throw e }
-                val fromCache = cached
-                val list = Iptv.parseM3u(txt)
-                if (list.ch.isEmpty()) throw Exception("в плейлисте нет каналов")
+                val loaded = repo.loadPlaylist(pl)
+                val list = loaded.list
+                val fromCache = loaded.fromCache
                 if (gen != loadGen) return@Thread
                 runOnUiThread {
                     if (gen != loadGen || isFinishing || isDestroyed) return@runOnUiThread
@@ -1233,72 +1120,35 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    /** Быстрый кэш уже разобранной программы: читается за доли секунды, в отличие от разбора большого XML. */
-    /**
-     * Загрузка программы передач (вызывать из фонового потока).
-     * Сначала мгновенно показывается кэш разобранной программы; свежий файл скачивается и разбирается только когда нужно.
-     */
+    /** Загрузка программы передач (вызывать из фонового потока): работу делает [Repository], здесь только показ результата. */
     private fun loadEpgNow(chs: List<Channel>, plEpg: String, force: Boolean, tz: Int, gen: Int = loadGen) {
-        val eu = (prefs.getString("epg", "") ?: "").ifEmpty { plEpg }.ifEmpty { getString(R.string.default_epg) }
-        if (eu.isEmpty()) {
-            runOnUiThread { epgStatus = "адрес не указан"; toast("В плейлисте нет адреса программы передач (url-tvg) — его можно указать в настройках") }
-            return
-        }
-        val ef = File(filesDir, "epg.bin")
-        val cf = File(filesDir, "epg.cache")
-        val key = eu + "|" + tz + "|" + chs.size + "|" + chs.joinToString("\u0001") { it.id + "\u0002" + it.name }.hashCode()
-        var downloaded = false
-        fun download() { Iptv.download(eu, ef); prefs.edit().putString("epgsrc", eu).apply(); downloaded = true }
-        fun publish(eids: List<String>, map: Map<String, List<Prog>>): Int {
-            var m = 0
-            for ((i, c) in chs.withIndex()) { c.eid = eids[i]; if (c.eid.isNotEmpty() && map.containsKey(c.eid)) m++ }
-            val total = map.values.sumOf { it.size }
-            runOnUiThread {
-                if (gen != loadGen) return@runOnUiThread
-                epg = map
-                epgStatus = "передач $total, каналов с программой $m из ${chs.size}"
-                toast("Программа: $epgStatus")
-                if (chPanel.visibility == View.VISIBLE && !moving) { val sp = chList.selectedItemPosition; renderChans(); chList.setSelection(sp.coerceAtLeast(0)) }
-                if (setup.visibility == View.VISIBLE) tvStat.text = "Программа передач: $epgStatus"
-                hud()
+        repo.loadEpg(chs, plEpg, getString(R.string.default_epg), force, tz, object : EpgListener {
+            override fun onNoUrl() {
+                runOnUiThread { epgStatus = "адрес не указан"; toast("В плейлисте нет адреса программы передач (url-tvg) — его можно указать в настройках") }
             }
-            return m
-        }
-        fun parseAndPublish(): Int {
-            val e = Iptv.parseEpg(ef, tz, chs)
-            val eids = chs.map { Iptv.matchEid(e, it) }
-            val m = publish(eids, e.map)
-            try { EpgCache.save(cf, key, ef.lastModified(), eids, e.map) } catch (x: Exception) { cf.delete() }
-            return m
-        }
-        try {
-            var shownFromCache = false
-            if (!force && cf.exists() && ef.exists()) {
-                try {
-                    val c = EpgCache.load(cf, key, ef.lastModified())
-                    if (c != null && c.first.size == chs.size) { publish(c.first, c.second); shownFromCache = true }
-                } catch (x: Exception) { cf.delete() }
-            }
-            val fresh = !force && ef.exists() && System.currentTimeMillis() - ef.lastModified() < 6 * 3600000L && prefs.getString("epgsrc", "") == eu
-            if (shownFromCache && fresh) return
-            if (!fresh) {
-                try { download() } catch (dl: Exception) {
-                    // не скачалось — остаёмся на прежних данных, если они от того же источника
-                    if (shownFromCache) return
-                    if (!(ef.exists() && prefs.getString("epgsrc", "") == eu)) throw dl
+
+            override fun onEpg(eids: List<String>, map: Map<String, List<Prog>>, matched: Int) {
+                val total = map.values.sumOf { it.size }
+                runOnUiThread {
+                    if (gen != loadGen) return@runOnUiThread
+                    epg = map
+                    epgStatus = "передач $total, каналов с программой $matched из ${chs.size}"
+                    toast("Программа: $epgStatus")
+                    if (chPanel.visibility == View.VISIBLE && !moving) { val sp = chList.selectedItemPosition; renderChans(); chList.setSelection(sp.coerceAtLeast(0)) }
+                    if (setup.visibility == View.VISIBLE) tvStat.text = "Программа передач: $epgStatus"
+                    hud()
                 }
             }
-            if (shownFromCache && !downloaded) return
-            var m = try { parseAndPublish() } catch (ex: Exception) { if (downloaded) throw ex; -1 }
-            if (m <= 0 && !downloaded) { try { download(); m = parseAndPublish() } catch (ex: Exception) { if (m < 0) throw ex } }
-        } catch (ex: Throwable) {
-            runOnUiThread {
-                if (gen != loadGen) return@runOnUiThread
-                epgStatus = "ошибка: " + Iptv.safeMsg(ex) + (if (ex.message?.contains("403") == true) " — сервер отклонил запрос; проверьте ссылку в браузере или задайте User-Agent в настройках" else "")
-                toast("Программа передач: $epgStatus")
-                if (setup.visibility == View.VISIBLE) tvStat.text = "Программа передач: $epgStatus"
+
+            override fun onError(e: Throwable) {
+                runOnUiThread {
+                    if (gen != loadGen) return@runOnUiThread
+                    epgStatus = "ошибка: " + Iptv.safeMsg(e) + (if (e.message?.contains("403") == true) " — сервер отклонил запрос; проверьте ссылку в браузере или задайте User-Agent в настройках" else "")
+                    toast("Программа передач: $epgStatus")
+                    if (setup.visibility == View.VISIBLE) tvStat.text = "Программа передач: $epgStatus"
+                }
             }
-        }
+        })
     }
 
     /* ---------- пульт ---------- */
@@ -1366,8 +1216,9 @@ class MainActivity : Activity() {
             return true
         }
         // «Назад» во время архива — возврат в прямой эфир
-        if (k == KeyEvent.KEYCODE_BACK && arch != null && cur != null) {
-            if (e.action == KeyEvent.ACTION_UP) { playChan(cur!!); toast("Прямой эфир") }
+        val live0 = cur
+        if (k == KeyEvent.KEYCODE_BACK && arch != null && live0 != null) {
+            if (e.action == KeyEvent.ACTION_UP) { playChan(live0); toast("Прямой эфир") }
             return true
         }
         if (k !in live) return super.dispatchKeyEvent(e)

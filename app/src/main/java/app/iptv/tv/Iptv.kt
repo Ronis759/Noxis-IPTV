@@ -42,15 +42,19 @@ object Iptv {
     const val MAX_PLAYLIST = 64L * 1024 * 1024
     const val MAX_LOGO = 4L * 1024 * 1024
     const val MAX_JSON = 2L * 1024 * 1024
-    var customUa: String = ""
+    @Volatile var customUa: String = ""
     /** User-Agent, с которым сервер реально ответил (если пришлось подбирать). Передаётся и в плеер. */
-    var goodUa: String? = null
+    @Volatile var goodUa: String? = null
     /** Вызывается из фонового потока, когда подобран новый рабочий User-Agent. */
-    var onUa: ((String) -> Unit)? = null
+    @Volatile var onUa: ((String) -> Unit)? = null
     private val UAS = listOf(
         "Mozilla/5.0", "VLC/3.0.20 LibVLC/3.0.20", "okhttp/4.12.0",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     )
+
+    /** true — редирект переводит защищённое соединение (https) на открытое (http). */
+    fun isDowngrade(from: String, to: String): Boolean =
+        from.startsWith("https://", true) && to.startsWith("http://", true)
 
     /** Открывает соединение с ручной обработкой редиректов; возвращает его только при коде 200. */
     private fun connect(url: String, ua: String): HttpURLConnection {
@@ -67,7 +71,10 @@ object Iptv {
                 val l = c.getHeaderField("Location")
                 c.disconnect()
                 if (l == null) break
-                u = URL(URL(u), l).toString()
+                val next = URL(URL(u), l).toString()
+                // https -> http: логин и ключи из ссылки ушли бы в открытом виде
+                if (isDowngrade(u, next)) throw IOException("Редирект с https на http заблокирован: ${redactUrl(u)}")
+                u = next
                 continue
             }
             if (code != 200) { c.disconnect(); throw HttpCodeException(code) }
@@ -77,8 +84,10 @@ object Iptv {
     }
 
     /** Перебирает User-Agent при 401/403/406/429/451 и отдаёт открытое соединение в [block]. */
-    private fun <T> withUa(url: String, remember: Boolean, rotate: Boolean = true, block: (HttpURLConnection) -> T): T {
-        val list = if (customUa.isNotEmpty()) listOf(customUa)
+    private fun <T> withUa(url: String, remember: Boolean, rotate: Boolean = true, fixedUa: String? = null, block: (HttpURLConnection) -> T): T {
+        // fixedUa — служебные запросы (GitHub): свой User-Agent, без подбора и без влияния на общий goodUa
+        val list = if (fixedUa != null) listOf(fixedUa)
+        else if (customUa.isNotEmpty()) listOf(customUa)
         else if (!rotate) listOf(goodUa ?: UAS[0])
         else listOfNotNull(goodUa) + UAS.filter { it != goodUa }
         var last: IOException? = null
@@ -88,7 +97,7 @@ object Iptv {
                 c = connect(url, ua)
                 val r = block(c)
                 // Запоминаем UA только если пришлось подбирать (не первый в списке)
-                if (remember && customUa.isEmpty() && idx > 0) { goodUa = ua; onUa?.invoke(ua) }
+                if (remember && fixedUa == null && customUa.isEmpty() && idx > 0) { goodUa = ua; onUa?.invoke(ua) }
                 return r
             } catch (e: HttpCodeException) {
                 last = e
@@ -101,8 +110,8 @@ object Iptv {
     }
 
     /** [remember] = false для побочных запросов (логотипы): они не меняют общий User-Agent и не перебирают их при 403. */
-    fun http(url: String, remember: Boolean = true, max: Long = MAX_PLAYLIST): ByteArray =
-        withUa(url, remember, remember) { c ->
+    fun http(url: String, remember: Boolean = true, max: Long = MAX_PLAYLIST, ua: String? = null): ByteArray =
+        withUa(url, remember && ua == null, remember && ua == null, ua) { c ->
             if (c.contentLengthLong > max) throw TooBigException(max)
             c.inputStream.use { readLimited(it, max) }
         }
@@ -122,11 +131,27 @@ object Iptv {
         return out.toByteArray()
     }
 
+    /** Копирует поток, но не больше [max] байт: иначе TooBigException. */
+    fun copyLimited(i: InputStream, o: java.io.OutputStream, max: Long) {
+        val buf = ByteArray(65536)
+        var total = 0L
+        while (true) {
+            val n = i.read(buf)
+            if (n < 0) break
+            total += n
+            if (total > max) throw TooBigException(max)
+            o.write(buf, 0, n)
+        }
+    }
+
     /** Потоковая загрузка в файл (без хранения всего ответа в памяти). Старый файл заменяется только при успехе. */
-    fun download(url: String, dest: File) {
+    fun download(url: String, dest: File, ua: String? = null, max: Long = Long.MAX_VALUE) {
         val tmp = File(dest.parentFile, dest.name + ".tmp")
         try {
-            withUa(url, true) { c -> c.inputStream.use { i -> tmp.outputStream().use { o -> i.copyTo(o, 65536) } } }
+            withUa(url, ua == null, ua == null, ua) { c ->
+                if (c.contentLengthLong > max) throw TooBigException(max)
+                c.inputStream.use { i -> tmp.outputStream().use { o -> copyLimited(i, o, max) } }
+            }
             if (!tmp.renameTo(dest)) {
                 dest.delete()
                 if (!tmp.renameTo(dest)) throw IOException("Не удалось сохранить файл")

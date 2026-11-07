@@ -158,4 +158,21 @@ ftp://bad | x
         assertEquals("", Iptv.matchEid(epg, Channel(0, "", "Неизвестный", "", "", "g", "u", 0, "", "")))
         assertEquals("первыйhd", Iptv.norm("Первый HD!"))
     }
+
+    // ---------- редиректы ----------
+
+    @Test fun redirect_downgrade_is_detected() {
+        assertTrue(Iptv.isDowngrade("https://a/x", "http://b/y"))
+        assertTrue(Iptv.isDowngrade("HTTPS://a/x", "HTTP://b/y"))
+        assertFalse(Iptv.isDowngrade("http://a/x", "https://b/y"))   // повышение защиты допустимо
+        assertFalse(Iptv.isDowngrade("http://a/x", "http://b/y"))
+        assertFalse(Iptv.isDowngrade("https://a/x", "https://b/y"))
+    }
+
+    @Test fun copyLimited_enforces_limit() {
+        val ok = ByteArrayOutputStream()
+        Iptv.copyLimited(ByteArrayInputStream(ByteArray(100)), ok, 100)
+        assertEquals(100, ok.size())
+        try { Iptv.copyLimited(ByteArrayInputStream(ByteArray(101)), ByteArrayOutputStream(), 100); fail() } catch (e: TooBigException) {}
+    }
 }

@@ -10,14 +10,14 @@ val hasReleaseKey: Boolean = keystorePath.isNotEmpty() && file(keystorePath).exi
 
 android {
     namespace = "app.iptv.tv"
-    compileSdk = 34
+    compileSdk = 35
     defaultConfig {
         applicationId = "app.iptv.tv"
         minSdk = 21
-        targetSdk = 34
+        targetSdk = 35
         // В GitHub Actions versionCode растёт с каждым запуском, локально = 1
         versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
-        versionName = "1.8.0"
+        versionName = "1.9.0"
         // Автообновление имеет смысл только у сборки, подписанной постоянным ключом (иначе Android не установит новую версию поверх)
         buildConfigField("boolean", "UPDATES_ENABLED", hasReleaseKey.toString())
     }
@@ -48,10 +48,11 @@ android {
     lint { abortOnError = false }
 }
 dependencies {
-    implementation("androidx.core:core:1.13.1")
-    implementation("androidx.media3:media3-exoplayer:1.3.1")
-    implementation("androidx.media3:media3-exoplayer-hls:1.3.1")
-    implementation("androidx.media3:media3-exoplayer-rtsp:1.3.1")
-    implementation("androidx.media3:media3-ui:1.3.1")
+    // Media3 1.9+ требует minSdk 23 (Android 6): на 1.8.x остаются поддерживаемыми приставки с Android 5 (minSdk 21)
+    implementation("androidx.core:core:1.15.0")
+    implementation("androidx.media3:media3-exoplayer:1.8.0")
+    implementation("androidx.media3:media3-exoplayer-hls:1.8.0")
+    implementation("androidx.media3:media3-exoplayer-rtsp:1.8.0")
+    implementation("androidx.media3:media3-ui:1.8.0")
     testImplementation("junit:junit:4.13.2")
 }
