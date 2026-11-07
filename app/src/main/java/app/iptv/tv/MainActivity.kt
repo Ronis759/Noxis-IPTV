@@ -638,7 +638,7 @@ class MainActivity : Activity() {
         }
         tvStat = TextView(this).apply { textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(10), 0, 0) }
 
-        val btEpg = small(tvButton("Обновить программу")).apply {
+        val btEpg = small(tvButton("Обновить программу передач")).apply {
             setOnClickListener {
                 if (chans.isEmpty()) { toast("Сначала загрузите плейлист") } else {
                     toast("Загрузка программы передач…")
