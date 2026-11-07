@@ -1,0 +1,12 @@
+build/
+.gradle/
+.idea/
+*.iml
+local.properties
+captures/
+.DS_Store
+# личные данные и ключи — никогда не коммитить
+servers.txt
+*.keystore
+*.jks
+*.p12
