@@ -75,7 +75,7 @@ keytool -genkeypair -keystore release.keystore -alias noxis -keyalg RSA -keysize
 
 **Сборка:** любой push в `main` собирает APK (вкладка **Actions → Build APK → Artifacts → iptv-tv-apk**). Если Secrets не заданы, APK подписывается временным ключом: поставить его можно, но обновить поверх нельзя.
 
-**Релиз:** *Actions → Build APK → Run workflow*, галочка **Опубликовать релиз**. Создаётся Release «<версия> (сборка <номер>)» с тегом `v<номер запуска>` и файлами `app-release.apk` и `app-release.apk.sha256` (контрольная сумма); номер совпадает с `versionCode`.
+**Релиз:** создаётся автоматически при каждом push в `main`, если заданы Secrets с постоянным ключом. Release называется «<версия> (сборка <номер>)», тег `v<номер запуска>` (совпадает с `versionCode`), в нём `app-release.apk` и `app-release.apk.sha256`. Правки только `*.md`, `LICENSE` и `dependabot.yml` релиз не создают. Без Secrets при push собирается только артефакт; релиз тогда можно выпустить вручную: *Actions → Build APK → Run workflow*, галочка **Опубликовать релиз**.
 
 CI проверяет, что `gradle/wrapper/gradle-wrapper.jar` совпадает с официальным.
 
