@@ -53,12 +53,16 @@ jobs:
           path: |
             app/build/outputs/apk/release/app-release.apk
             app/build/outputs/apk/release/app-release.apk.sha256
+      - name: Версия из build.gradle.kts
+        id: ver
+        run: echo "name=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
       - name: Публикация релиза
         if: github.event_name == 'workflow_dispatch' && inputs.release
         uses: softprops/action-gh-release@v2
         with:
+          # тег = номер запуска (по нему сравнивает автообновление), в названии — читаемая версия
           tag_name: v${{ github.run_number }}
-          name: v${{ github.run_number }}
+          name: ${{ steps.ver.outputs.name }} (сборка ${{ github.run_number }})
           files: |
             app/build/outputs/apk/release/app-release.apk
             app/build/outputs/apk/release/app-release.apk.sha256
