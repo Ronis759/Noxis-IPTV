@@ -18,7 +18,7 @@ jobs:
       # релиз при push создаётся только если задан постоянный ключ: иначе APK не сможет обновить установленный
       HAS_KEY: ${{ secrets.KEYSTORE_BASE64 != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: gradle/actions/wrapper-validation@v4   # gradle-wrapper.jar должен совпадать с официальным
       - uses: actions/setup-java@v4
         with:
