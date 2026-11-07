@@ -49,7 +49,7 @@ android {
 }
 dependencies {
     // Media3 1.9+ требует minSdk 23 (Android 6): на 1.8.x остаются поддерживаемыми приставки с Android 5 (minSdk 21)
-    implementation("androidx.core:core:1.15.0")
+    implementation("androidx.core:core:1.19.1")
     implementation("androidx.media3:media3-exoplayer:1.8.0")
     implementation("androidx.media3:media3-exoplayer-hls:1.8.0")
     implementation("androidx.media3:media3-exoplayer-rtsp:1.8.0")
