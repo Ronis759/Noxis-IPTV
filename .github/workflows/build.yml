@@ -30,6 +30,10 @@ jobs:
           else
             echo "::warning::Secret KEYSTORE_BASE64 не задан: APK подписан временным ключом, обновление поверх установленного не встанет"
           fi
+      - name: Юнит-тесты
+        run: |
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest --no-daemon
       - name: Сборка
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}

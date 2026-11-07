@@ -23,7 +23,7 @@ object Updater {
     /** Последний релиз репозитория [repo] («владелец/имя»). null — в релизе нет APK или номер не прочитался. */
     fun fetch(repo: String): Info? {
         val j = try {
-            JSONObject(Iptv.text(Iptv.http("https://api.github.com/repos/$repo/releases/latest")))
+            JSONObject(Iptv.text(Iptv.http("https://api.github.com/repos/$repo/releases/latest", true, Iptv.MAX_JSON)))
         } catch (e: HttpCodeException) {
             if (e.code == 404) throw IOException("релизов пока нет") else throw e
         }

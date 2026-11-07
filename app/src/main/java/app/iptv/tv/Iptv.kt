@@ -7,9 +7,14 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.Charset
+import java.nio.charset.CodingErrorAction
 import java.util.Calendar
 import java.util.TimeZone
 import java.util.zip.GZIPInputStream
@@ -26,11 +31,17 @@ class Channel(
 class Prog(val s: Long, val e: Long, val title: String)
 class Playlist(val ch: List<Channel>, val epgUrl: String)
 class HttpCodeException(val code: Int) : IOException("HTTP $code")
+/** Ответ больше допустимого размера (защита от огромных плейлистов, логотипов и «gzip-бомб»). */
+class TooBigException(limit: Long) : IOException("Ответ слишком большой (лимит ${limit / 1048576} МБ)")
 class Epg(val map: Map<String, List<Prog>>, val names: Map<String, String>, val ids: Map<String, String>)
 class Server(val name: String, val pl: String, val epg: String)
 
 object Iptv {
     const val DEFAULT_UA = "Mozilla/5.0 (Linux; Android TV) IPTV"
+    /** Предельные размеры ответов, байт. Плейлист — после распаковки gzip. */
+    const val MAX_PLAYLIST = 64L * 1024 * 1024
+    const val MAX_LOGO = 4L * 1024 * 1024
+    const val MAX_JSON = 2L * 1024 * 1024
     var customUa: String = ""
     /** User-Agent, с которым сервер реально ответил (если пришлось подбирать). Передаётся и в плеер. */
     var goodUa: String? = null
@@ -62,7 +73,7 @@ object Iptv {
             if (code != 200) { c.disconnect(); throw HttpCodeException(code) }
             return c
         }
-        throw IOException("Не удалось загрузить: $url")
+        throw IOException("Не удалось загрузить: ${redactUrl(url)}")
     }
 
     /** Перебирает User-Agent при 401/403/406/429/451 и отдаёт открытое соединение в [block]. */
@@ -90,8 +101,26 @@ object Iptv {
     }
 
     /** [remember] = false для побочных запросов (логотипы): они не меняют общий User-Agent и не перебирают их при 403. */
-    fun http(url: String, remember: Boolean = true): ByteArray =
-        withUa(url, remember, remember) { c -> c.inputStream.use { it.readBytes() } }
+    fun http(url: String, remember: Boolean = true, max: Long = MAX_PLAYLIST): ByteArray =
+        withUa(url, remember, remember) { c ->
+            if (c.contentLengthLong > max) throw TooBigException(max)
+            c.inputStream.use { readLimited(it, max) }
+        }
+
+    /** Читает поток целиком, но не больше [max] байт: иначе TooBigException. */
+    fun readLimited(i: InputStream, max: Long): ByteArray {
+        val out = ByteArrayOutputStream()
+        val buf = ByteArray(65536)
+        var total = 0L
+        while (true) {
+            val n = i.read(buf)
+            if (n < 0) break
+            total += n
+            if (total > max) throw TooBigException(max)
+            out.write(buf, 0, n)
+        }
+        return out.toByteArray()
+    }
 
     /** Потоковая загрузка в файл (без хранения всего ответа в памяти). Старый файл заменяется только при успехе. */
     fun download(url: String, dest: File) {
@@ -110,9 +139,36 @@ object Iptv {
     private fun isGz(b: ByteArray) = b.size > 2 && b[0] == 0x1f.toByte() && b[1] == 0x8b.toByte()
 
     fun text(b: ByteArray): String {
-        val raw = if (isGz(b)) GZIPInputStream(ByteArrayInputStream(b)).use { it.readBytes() } else b
-        return String(raw, Charsets.UTF_8).removePrefix("\uFEFF")
+        val raw = if (isGz(b)) GZIPInputStream(ByteArrayInputStream(b)).use { readLimited(it, MAX_PLAYLIST) } else b
+        return decode(raw).removePrefix("\uFEFF")
     }
+
+    /** Строго UTF-8; если байты не образуют корректный UTF-8 — считаем, что это windows-1251 (старые русские плейлисты). */
+    fun decode(raw: ByteArray): String = try {
+        Charsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(raw)).toString()
+    } catch (e: CharacterCodingException) {
+        String(raw, Charset.forName("windows-1251"))
+    }
+
+    private val URL_IN_TEXT = Regex("""[A-Za-z][A-Za-z0-9+.\-]*://[^\s"'<>]+""")
+
+    /** «схема://хост»: путь, параметры и логин:пароль отбрасываются, чтобы секреты из ссылки не попадали на экран. */
+    fun redactUrl(u: String): String {
+        val i = u.indexOf("://")
+        if (i < 0) return "…"
+        var rest = u.substring(i + 3)
+        val end = rest.indexOfFirst { it == '/' || it == '?' || it == '#' }
+        if (end >= 0) rest = rest.substring(0, end)
+        rest = rest.substringAfterLast('@')
+        return u.substring(0, i + 3) + rest
+    }
+
+    /** Текст ошибки для показа пользователю: все ссылки в нём заменены на «схема://хост». */
+    fun safeMsg(e: Throwable): String =
+        URL_IN_TEXT.replace(e.message ?: e.javaClass.simpleName) { redactUrl(it.value) }
 
     private val AT = Regex("([\\w-]+)=\"([^\"]*)\"")
     private fun attrs(s: String): Map<String, String> =

@@ -54,7 +54,7 @@ object Logos {
             // строку уже переиспользовали под другой канал — загрузка не нужна
             if (v.tag != url) return@execute
             try {
-                val b = Iptv.http(url, false)
+                val b = Iptv.http(url, false, Iptv.MAX_LOGO)
                 val o = BitmapFactory.Options()
                 o.inJustDecodeBounds = true
                 BitmapFactory.decodeByteArray(b, 0, b.size, o)
@@ -74,6 +74,8 @@ object Logos {
                         }
                     }
                 }
+            } catch (e: TooBigException) {
+                markBad(url, true)
             } catch (e: HttpCodeException) {
                 markBad(url, e.code == 404 || e.code == 410)
             } catch (e: Throwable) {

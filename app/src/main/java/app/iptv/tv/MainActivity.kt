@@ -37,6 +37,8 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.ui.PlayerView
 import java.io.File
 import java.text.SimpleDateFormat
@@ -165,6 +167,10 @@ class MainActivity : Activity() {
     private var arcIdx = 0
     private var guide: Channel? = null   // канал, чья телепрограмма открыта в панели архива
     private lateinit var btStart: Button
+    private lateinit var btDim: Button
+    private lateinit var dimOverlay: View
+    private val DIM_MIN = 30
+    private var panelDim = 95   // непрозрачность подложки панелей (списки каналов, телепрограмма, группы, серверы), %
     private var triedHls = false
     private var ctype = "flussonic"
     // автовосстановление потока
@@ -208,8 +214,13 @@ class MainActivity : Activity() {
             ui.post { if (Iptv.customUa.isEmpty()) httpFactory.setUserAgent(ua) }
         }
         // DefaultDataSource поверх HTTP-фабрики: кроме http(s) работают udp://, rtp://, file:, content:
+        // Сырой MPEG-TS (не HLS): без IDR-кадров и без разделителей access unit многие IPTV-потоки стартуют долго или с артефактами.
+        // Эти флаги включают разбор таких потоков (на HLS-сегменты они не влияют — там свой экстрактор).
+        val extractors = DefaultExtractorsFactory().setTsExtractorFlags(
+            DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
+        )
         player = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(this, httpFactory))).build()
+            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(this, httpFactory), extractors)).build()
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 ui.removeCallbacks(stallRun)
@@ -255,6 +266,7 @@ class MainActivity : Activity() {
         pv.setOnClickListener { if (!panelOpen()) openChans() }
         root.addView(pv, FrameLayout.LayoutParams(-1, -1))
 
+        panelDim = prefs.getInt("dim", 95).coerceIn(DIM_MIN, 100)
         favs = HashSet(prefs.getStringSet("fav", emptySet()) ?: emptySet())
         hiddenGroups = HashSet(prefs.getStringSet("hg", emptySet()) ?: emptySet())
         buildHud(); buildSeek(); buildPanels(); buildSetup(); buildServers(); buildGroupMgr(); buildToast()
@@ -281,6 +293,11 @@ class MainActivity : Activity() {
     private fun checkUpdate(manual: Boolean) {
         val repo = getString(R.string.github_repo).trim()
         if (repo.isEmpty()) { if (manual) toast("Не задан репозиторий: впишите github_repo в strings.xml"); return }
+        // Сборка не подписана постоянным ключом (локальная или CI без Secrets): новую версию поверх неё Android не установит — не предлагаем
+        if (!BuildConfig.UPDATES_ENABLED) {
+            if (manual) toast("Эта сборка подписана временным ключом — обновление поверх неё не установится. Подпишите APK своим ключом (см. README)")
+            return
+        }
         if (!manual && now() - prefs.getLong("upd_t", 0) < 6 * 3600) return
         if (manual) toast("Проверка обновлений…")
         Thread {
@@ -294,7 +311,7 @@ class MainActivity : Activity() {
                     else if (manual) toast("Установлена последняя версия ($mine)")
                 }
             } catch (e: Exception) {
-                if (manual) runOnUiThread { toast("Не удалось проверить обновления: " + e.message) }
+                if (manual) runOnUiThread { toast("Не удалось проверить обновления: " + Iptv.safeMsg(e)) }
             }
         }.start()
     }
@@ -319,7 +336,7 @@ class MainActivity : Activity() {
                     if (err != null) toast(err)
                 }
             } catch (e: Exception) {
-                runOnUiThread { toast("Не удалось скачать обновление: " + e.message) }
+                runOnUiThread { toast("Не удалось скачать обновление: " + Iptv.safeMsg(e)) }
             }
         }.start()
     }
@@ -438,7 +455,7 @@ class MainActivity : Activity() {
     private fun panel(title: TextView, a: ListView, b: ListView, frac: Float, g: Int): LinearLayout {
         val p = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xF2101519.toInt())
+            setBackgroundColor(panelColor())
             setPadding(dp(20), dp(20), dp(20), dp(20))
             visibility = View.GONE
         }
@@ -561,6 +578,21 @@ class MainActivity : Activity() {
         ad(grpList).compact = !on
     }
 
+    /** Цвет подложки панелей: тёмно-серый с непрозрачностью [panelDim] %. */
+    private fun panelColor(): Int = (((panelDim * 255 + 50) / 100) shl 24) or 0x101519
+
+    private fun dimLabel() = "Затемнение подложки списков: $panelDim%  (◄ ► ±5)"
+
+    /** Меняет затемнение сразу для всех панелей и сохраняет значение. */
+    private fun setDim(v: Int) {
+        panelDim = v.coerceIn(DIM_MIN, 100)
+        prefs.edit().putInt("dim", panelDim).apply()
+        val c = panelColor()
+        for (p in listOf(chPanel, arPanel, gmPanel, srvPanel)) p.setBackgroundColor(c)
+        dimOverlay.setBackgroundColor(c)
+        btDim.text = dimLabel()
+    }
+
     private fun cardBg() = GradientDrawable().apply {
         setColor(0xFF151D23.toInt()); setStroke(dp(1), 0xFF202B32.toInt()); cornerRadius = dp(14).toFloat()
     }
@@ -636,13 +668,37 @@ class MainActivity : Activity() {
         btSort = small(tvButton("")).apply {
             setOnClickListener { setSort(sorts[(sorts.indexOf(sortMode) + 1) % sorts.size]) }
         }
+        // затемнение подложки: OK — следующее значение (шаг 10), ◄/► — точная подстройка на 5 %
+        btDim = small(tvButton("")).apply {
+            setOnClickListener {
+                val n = (panelDim / 10 + 1) * 10
+                setDim(if (n > 100) DIM_MIN else n)
+            }
+            setOnKeyListener { _, k, e ->
+                if (e.action == KeyEvent.ACTION_DOWN && (k == KeyEvent.KEYCODE_DPAD_LEFT || k == KeyEvent.KEYCODE_DPAD_RIGHT)) {
+                    setDim(panelDim + if (k == KeyEvent.KEYCODE_DPAD_LEFT) -5 else 5)
+                    true
+                } else false
+            }
+        }
+        // пример: яркий «кадр» и поверх него подложка с выбранной прозрачностью
+        dimOverlay = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), 0, dp(12), 0)
+            setBackgroundColor(panelColor())
+            addView(TextView(this@MainActivity).apply { text = "Канал · передача"; textSize = 15f; setTextColor(Color.WHITE) })
+        }
+        val dimPreview = FrameLayout(this).apply {
+            background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xFF2E86AB.toInt(), 0xFFF6C85F.toInt(), 0xFFE4572E.toInt()))
+            addView(dimOverlay, FrameLayout.LayoutParams(-1, -1).apply { leftMargin = dp(70) })
+        }
         tvStat = TextView(this).apply { textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(10), 0, 0) }
 
         val btEpg = small(tvButton("Обновить программу передач")).apply {
             setOnClickListener {
                 if (chans.isEmpty()) { toast("Сначала загрузите плейлист") } else {
                     toast("Загрузка программы передач…")
-                    val tzv = parseTz(etTz.text.toString())
+                    val tzv = Tz.parse(etTz.text.toString())
                     prefs.edit().putString("epg", etEpg.text.toString().trim()).putInt("tzm", tzv).apply()
                     Thread { loadEpgNow(chans, plEpgUrl, true, tzv) }.start()
                 }
@@ -657,7 +713,9 @@ class MainActivity : Activity() {
             addView(btAdv); addView(advBox)
         }
         val right = card("Параметры").apply {
-            addView(btType); addView(btSort); addView(btStart); addView(tvStat)
+            addView(btType); addView(btSort); addView(btStart); addView(btDim)
+            addView(dimPreview, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(6) })
+            addView(tvStat)
         }
         val cols = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -835,7 +893,7 @@ class MainActivity : Activity() {
         gmList = lv()
         gmPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xF2101519.toInt())
+            setBackgroundColor(panelColor())
             setPadding(dp(20), dp(20), dp(20), dp(20))
             visibility = View.GONE
             addView(TextView(this@MainActivity).apply { text = "Группы каналов — OK: показать / скрыть"; textSize = 24f; setTextColor(Color.WHITE); setPadding(0, 0, 0, dp(10)) })
@@ -925,12 +983,13 @@ class MainActivity : Activity() {
         val pl = (prefs.getString("pl", "") ?: "").ifEmpty { getString(R.string.default_playlist) }
         etPl.setText(pl)
         etEpg.setText(prefs.getString("epg", "") ?: "")
-        etTz.setText(fmtTz(tzMin()))
+        etTz.setText(Tz.format(tzMin()))
         etUa.setText(prefs.getString("ua", ""))
         tvSrv.text = srvLabel()
         btType.text = typeLabel()
         btSort.text = "Порядок каналов: ${sortNames[sortMode]}"
         btStart.text = startLabel()
+        btDim.text = dimLabel()
         tvStat.text = "Программа передач: $epgStatus"
         setAdvanced(pl.isEmpty())   // если плейлиста нет, сразу показываем поля для ручного ввода
         showPanel(setup)
@@ -942,7 +1001,7 @@ class MainActivity : Activity() {
         val ed = prefs.edit()
         if (newPl != (prefs.getString("pl", "") ?: "")) ed.remove("srvn")   // адрес изменили вручную — имя сервера уже не то
         ed.putString("pl", newPl).putString("epg", etEpg.text.toString().trim())
-            .putInt("tzm", parseTz(etTz.text.toString())).putString("ct", ctype).putString("ua", etUa.text.toString().trim()).apply()
+            .putInt("tzm", Tz.parse(etTz.text.toString())).putString("ct", ctype).putString("ua", etUa.text.toString().trim()).apply()
         Iptv.customUa = etUa.text.toString().trim()
         httpFactory.setUserAgent(Iptv.customUa.ifEmpty { Iptv.goodUa ?: Iptv.DEFAULT_UA })
         closePanels()
@@ -1026,7 +1085,7 @@ class MainActivity : Activity() {
         srvList = lv()
         srvPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xF2101519.toInt())
+            setBackgroundColor(panelColor())
             setPadding(dp(20), dp(20), dp(20), dp(20))
             visibility = View.GONE
             addView(TextView(this@MainActivity).apply { text = "Выберите сервер"; textSize = 24f; setTextColor(Color.WHITE); setPadding(0, 0, 0, dp(10)) })
@@ -1046,22 +1105,6 @@ class MainActivity : Activity() {
     /* ---------- часовой пояс программы (в минутах) ---------- */
     /** Сохранённый пояс в минутах; старое значение в часах («tz») пересчитывается. */
     private fun tzMin(): Int = if (prefs.contains("tzm")) prefs.getInt("tzm", 0) else prefs.getInt("tz", 0) * 60
-
-    /** «3», «-3», «5.5», «5,5», «5:30» → минуты от UTC (в пределах ±14 ч). */
-    private fun parseTz(s: String): Int {
-        val t = s.trim().replace(',', '.')
-        if (t.isEmpty()) return 0
-        val neg = t.startsWith("-")
-        val u = t.trimStart('+', '-')
-        val m = if (u.contains(':')) {
-            val parts = u.split(':')
-            (parts[0].toIntOrNull() ?: 0) * 60 + (parts.getOrNull(1)?.toIntOrNull() ?: 0)
-        } else Math.round((u.toDoubleOrNull() ?: 0.0) * 60).toInt()
-        return (if (neg) -m else m).coerceIn(-14 * 60, 14 * 60)
-    }
-
-    private fun fmtTz(m: Int): String =
-        if (m % 60 == 0) (m / 60).toString() else String.format(Locale.US, "%s%d:%02d", if (m < 0) "-" else "", Math.abs(m) / 60, Math.abs(m) % 60)
 
     /** Архивная передача закончилась: включаем следующую из программы, а если её нет (или она ещё не вышла) — прямой эфир. */
     private fun archEnded() {
@@ -1185,41 +1228,12 @@ class MainActivity : Activity() {
                 plEpgUrl = list.epgUrl
                 loadEpgNow(list.ch, list.epgUrl, force, tz, gen)
             } catch (e: Exception) {
-                runOnUiThread { if (gen == loadGen) { toast("Ошибка: " + e.message); if (chans.isEmpty()) openSetup() } }
+                runOnUiThread { if (gen == loadGen) { toast("Ошибка: " + Iptv.safeMsg(e)); if (chans.isEmpty()) openSetup() } }
             }
         }.start()
     }
 
     /** Быстрый кэш уже разобранной программы: читается за доли секунды, в отличие от разбора большого XML. */
-    private fun saveEpgCache(cf: File, key: String, src: Long, eids: List<String>, map: Map<String, List<Prog>>) {
-        val titles = LinkedHashMap<String, Int>()
-        for (l in map.values) for (p in l) titles.getOrPut(p.title) { titles.size }
-        java.io.DataOutputStream(java.io.BufferedOutputStream(java.io.FileOutputStream(cf), 65536)).use { o ->
-            o.writeUTF(key); o.writeLong(src)
-            o.writeInt(eids.size); eids.forEach { o.writeUTF(it) }
-            o.writeInt(titles.size); titles.keys.forEach { o.writeUTF(it) }
-            o.writeInt(map.size)
-            for ((id, l) in map) {
-                o.writeUTF(id); o.writeInt(l.size)
-                for (p in l) { o.writeLong(p.s); o.writeLong(p.e); o.writeInt(titles[p.title]!!) }
-            }
-        }
-    }
-
-    private fun loadEpgCache(cf: File, key: String, src: Long): Pair<List<String>, Map<String, List<Prog>>>? {
-        java.io.DataInputStream(java.io.BufferedInputStream(java.io.FileInputStream(cf), 65536)).use { i ->
-            if (i.readUTF() != key || i.readLong() != src) return null
-            val eids = List(i.readInt()) { i.readUTF() }
-            val titles = List(i.readInt()) { i.readUTF() }
-            val map = HashMap<String, List<Prog>>()
-            repeat(i.readInt()) {
-                val id = i.readUTF()
-                map[id] = List(i.readInt()) { Prog(i.readLong(), i.readLong(), titles[i.readInt()]) }
-            }
-            return eids to map
-        }
-    }
-
     /**
      * Загрузка программы передач (вызывать из фонового потока).
      * Сначала мгновенно показывается кэш разобранной программы; свежий файл скачивается и разбирается только когда нужно.
@@ -1254,14 +1268,14 @@ class MainActivity : Activity() {
             val e = Iptv.parseEpg(ef, tz, chs)
             val eids = chs.map { Iptv.matchEid(e, it) }
             val m = publish(eids, e.map)
-            try { saveEpgCache(cf, key, ef.lastModified(), eids, e.map) } catch (x: Exception) { cf.delete() }
+            try { EpgCache.save(cf, key, ef.lastModified(), eids, e.map) } catch (x: Exception) { cf.delete() }
             return m
         }
         try {
             var shownFromCache = false
             if (!force && cf.exists() && ef.exists()) {
                 try {
-                    val c = loadEpgCache(cf, key, ef.lastModified())
+                    val c = EpgCache.load(cf, key, ef.lastModified())
                     if (c != null && c.first.size == chs.size) { publish(c.first, c.second); shownFromCache = true }
                 } catch (x: Exception) { cf.delete() }
             }
@@ -1280,7 +1294,7 @@ class MainActivity : Activity() {
         } catch (ex: Throwable) {
             runOnUiThread {
                 if (gen != loadGen) return@runOnUiThread
-                epgStatus = "ошибка: " + (ex.message ?: ex.javaClass.simpleName) + (if (ex.message?.contains("403") == true) " — сервер отклонил запрос; проверьте ссылку в браузере или задайте User-Agent в настройках" else "")
+                epgStatus = "ошибка: " + Iptv.safeMsg(ex) + (if (ex.message?.contains("403") == true) " — сервер отклонил запрос; проверьте ссылку в браузере или задайте User-Agent в настройках" else "")
                 toast("Программа передач: $epgStatus")
                 if (setup.visibility == View.VISIBLE) tvStat.text = "Программа передач: $epgStatus"
             }

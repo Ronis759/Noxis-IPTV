@@ -17,8 +17,11 @@ android {
         targetSdk = 34
         // В GitHub Actions versionCode растёт с каждым запуском, локально = 1
         versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
-        versionName = "1.7.0"
+        versionName = "1.8.0"
+        // Автообновление имеет смысл только у сборки, подписанной постоянным ключом (иначе Android не установит новую версию поверх)
+        buildConfigField("boolean", "UPDATES_ENABLED", hasReleaseKey.toString())
     }
+    buildFeatures { buildConfig = true }
     // Подпись релиза: ключ и пароли берутся из переменных окружения (в GitHub Actions — из Secrets).
     // Без них (локальная сборка) APK подписывается обычным отладочным ключом Android.
     signingConfigs {
@@ -50,4 +53,5 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:1.3.1")
     implementation("androidx.media3:media3-exoplayer-rtsp:1.3.1")
     implementation("androidx.media3:media3-ui:1.3.1")
+    testImplementation("junit:junit:4.13.2")
 }
