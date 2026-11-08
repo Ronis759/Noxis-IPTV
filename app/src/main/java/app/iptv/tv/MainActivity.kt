@@ -69,7 +69,10 @@ class MainActivity : Activity() {
     private lateinit var chList: ListView
     private lateinit var dayList: ListView
     private lateinit var progList: ListView
-    private lateinit var arTitle: TextView
+    private lateinit var arTitle: TextView   // название канала в шапке архива
+    private lateinit var arPrefix: TextView  // надпись «Архив:»
+    private lateinit var arLogo: ImageView   // значок канала в шапке архива
+    private lateinit var arInfo: TextView    // тип архива и число дней
     private lateinit var etPl: EditText
     private lateinit var etEpg: EditText
     private lateinit var etTz: EditText
@@ -419,18 +422,17 @@ class MainActivity : Activity() {
         adapter = RowAdapter(this@MainActivity)
     }
 
-    private fun panel(title: TextView, a: ListView, b: ListView, frac: Float, g: Int): LinearLayout {
+    private fun panel(title: View, a: ListView, b: ListView, frac: Float, g: Int): LinearLayout {
         val p = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(panelColor())
             setPadding(dp(20), dp(20), dp(20), dp(20))
             visibility = View.GONE
         }
-        title.textSize = 24f; title.setTextColor(Color.WHITE); title.setPadding(0, 0, 0, dp(10))
         p.addView(title)
         val row = LinearLayout(this)
-        row.addView(a, LinearLayout.LayoutParams(0, -1, 1f))
-        row.addView(b, LinearLayout.LayoutParams(0, -1, 2f))
+        row.addView(a, LinearLayout.LayoutParams(dp(120), -1))   // точная ширина задаётся в fitDayList()
+        row.addView(b, LinearLayout.LayoutParams(0, -1, 1f))
         p.addView(row, LinearLayout.LayoutParams(-1, 0, 1f))
         root.addView(p, FrameLayout.LayoutParams((resources.displayMetrics.widthPixels * frac).toInt(), -1, g))
         return p
@@ -441,8 +443,25 @@ class MainActivity : Activity() {
         (chList.adapter as RowAdapter).icons = true
         chTitle = TextView(this).apply { textSize = 20f; maxLines = 2; text = "Каналы   ·   программа: $epgStatus" }
         buildChPanel()
-        arTitle = TextView(this)
-        arPanel = panel(arTitle, dayList, progList, 0.57f, Gravity.END)
+        // шапка архива: «Архив:» · значок канала · название канала, ниже — тип архива и число дней
+        arPrefix = TextView(this).apply { text = "Архив:"; textSize = 24f; setTextColor(Theme.gray) }
+        arLogo = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER; visibility = View.GONE }
+        arTitle = TextView(this).apply {
+            textSize = 24f; setTextColor(Color.WHITE); maxLines = 1; ellipsize = TextUtils.TruncateAt.END
+        }
+        arInfo = TextView(this).apply { textSize = 14f; setTextColor(Theme.gray); maxLines = 2 }
+        val arHead = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 0, 0, dp(10))
+            addView(LinearLayout(this@MainActivity).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                addView(arPrefix)
+                addView(arLogo, LinearLayout.LayoutParams(dp(56), dp(40)).apply { leftMargin = dp(12) })
+                addView(arTitle, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(10) })
+            })
+            addView(arInfo)
+        }
+        arPanel = panel(arHead, dayList, progList, 0.57f, Gravity.END)
 
         // группы каналов: список свёрнут и разворачивается значком ☰ в левой полосе; OK — показать группу
         grpList.onItemClickListener = AdapterView.OnItemClickListener { _, _, pos, _ -> selectGroup(ad(grpList).row(pos).title) }
@@ -1105,7 +1124,9 @@ class MainActivity : Activity() {
     private fun openArch(ch: Channel? = cur, keepChannels: Boolean = false) {
         val c = ch ?: return
         guide = c
-        arTitle.text = "Архив · ${c.name}  (тип: ${archType(c)}, дней: ${if (c.days > 0) c.days else 7}" + (if (c.days == 0 && c.ctype.isEmpty() && c.csrc.isEmpty()) ", в плейлисте нет catchup)" else ")")
+        arTitle.text = c.name
+        Logos.load(arLogo, c.logo, true)
+        arInfo.text = "тип: ${archType(c)}, дней: ${if (c.days > 0) c.days else 7}" + (if (c.days == 0 && c.ctype.isEmpty() && c.csrc.isEmpty()) ", в плейлисте нет catchup" else "")
         val n = minOf(if (c.days > 0) c.days else 7, 14)
         val f = SimpleDateFormat("dd.MM", Locale.getDefault())
         ad(dayList).set((0..n).map { i ->
@@ -1317,13 +1338,23 @@ class MainActivity : Activity() {
         btFont.text = fontLabel()
     }
 
+    /** Колонка дат архива: ширина по самой длинной надписи «Сегодня», всё остальное место отдано передачам. */
+    private fun fitDayList() {
+        val paint = android.graphics.Paint()
+        paint.textSize = android.util.TypedValue.applyDimension(
+            android.util.TypedValue.COMPLEX_UNIT_SP, 20f * UiScale.f, resources.displayMetrics)
+        // в ширину строки входят отступы (12 + 12) и левое поле текста (12); +4 — запас, чтобы «Сегодня» не обрезалось
+        dayList.layoutParams = LinearLayout.LayoutParams(paint.measureText("Сегодня").toInt() + dp(40), -1)
+    }
+
     /** Применяет масштаб шрифта к плашкам, сообщениям и всем спискам. */
     private fun applyFont() {
         val f = UiScale.f
         hudT.textSize = 26f * f; hudP.textSize = 18f * f; hudN.textSize = 16f * f
         seekT.textSize = 18f * f; seekL.textSize = 16f * f; seekR.textSize = 16f * f
         toastTv.textSize = 18f * f
-        chTitle.textSize = 20f * f; arTitle.textSize = 24f * f
+        chTitle.textSize = 20f * f; arTitle.textSize = 24f * f; arPrefix.textSize = 24f * f; arInfo.textSize = 14f * f
+        fitDayList()
         for (l in listOf(grpList, chList, dayList, progList, srvList)) ad(l).notifyDataSetChanged()
     }
 
