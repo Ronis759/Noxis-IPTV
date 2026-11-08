@@ -40,7 +40,7 @@ class RowAdapter(private val ctx: Context) : BaseAdapter() {
             addView(LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
                 addView(TextView(ctx).apply { textSize = 20f; maxLines = 1; ellipsize = TextUtils.TruncateAt.END })
-                addView(TextView(ctx).apply { textSize = 15f; maxLines = 1; setTextColor(0xFF8A9AA5.toInt()) })
+                addView(TextView(ctx).apply { textSize = 15f; maxLines = 1; setTextColor(Theme.gray) })
             }, lp)
         }
         val r = rows[i]
@@ -54,7 +54,7 @@ class RowAdapter(private val ctx: Context) : BaseAdapter() {
             text = if (comp) r.short.ifEmpty { r.title.take(1).uppercase() } else r.title
             textSize = if (comp) 24f else 20f * UiScale.f
             gravity = if (comp) Gravity.CENTER_HORIZONTAL else Gravity.START
-            setTextColor(if (r.title == active && active.isNotEmpty()) 0xFF6FE3C1.toInt() else if (r.dim) 0xFF8A9AA5.toInt() else Color.WHITE)
+            setTextColor(if (r.title == active && active.isNotEmpty()) Theme.accent else if (r.dim) Theme.gray else Color.WHITE)
         }
         (tx.getChildAt(1) as TextView).apply { textSize = 15f * UiScale.f; text = r.sub; visibility = if (r.sub.isEmpty() || comp) View.GONE else View.VISIBLE }
         return box

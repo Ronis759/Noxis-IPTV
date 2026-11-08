@@ -96,6 +96,8 @@ class MainActivity : Activity() {
     private lateinit var chTitle: TextView
     private lateinit var numTv: TextView                       // набор номера канала цифрами
     private val numBuf = StringBuilder()
+    private var reopenSetup = false                            // после смены цветовой схемы вернуться в настройки
+    private lateinit var btTheme: Button
     private var moreOpen = false                               // раскрыто меню «Ещё» в левой колонке
     private var query = ""                                     // текст поиска каналов
     private val history = ArrayList<String>()                  // история просмотра: Channel.okey, свежие первыми
@@ -176,6 +178,9 @@ class MainActivity : Activity() {
         root.setBackgroundColor(Color.BLACK)
         setContentView(root)
 
+        Theme.use(prefs.getString("theme", "teal"))
+        reopenSetup = prefs.getBoolean("reopen", false)
+        if (reopenSetup) prefs.edit().remove("reopen").apply()
         Iptv.customUa = prefs.getString("ua", "") ?: ""
         Iptv.goodUa = prefs.getString("gua", "")?.ifEmpty { null }
         httpFactory = DefaultHttpDataSource.Factory()
@@ -281,7 +286,7 @@ class MainActivity : Activity() {
         hudBox = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = roundBg(0xEE101519.toInt())
+            background = roundBg(Theme.hud)
             setPadding(dp(28), dp(16), dp(28), dp(16))
             visibility = View.GONE
         }
@@ -296,8 +301,8 @@ class MainActivity : Activity() {
         lpLogo.rightMargin = dp(18)
         hudBox.addView(hudLogo, lpLogo)
         hudT = TextView(this).apply { textSize = 26f; setTextColor(Color.WHITE) }
-        hudP = TextView(this).apply { textSize = 18f; setTextColor(0xFF6FE3C1.toInt()) }
-        hudN = TextView(this).apply { textSize = 16f; setTextColor(0xFF8A9AA5.toInt()); maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
+        hudP = TextView(this).apply { textSize = 18f; setTextColor(Theme.accent) }
+        hudN = TextView(this).apply { textSize = 16f; setTextColor(Theme.gray); maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
         hudP.maxLines = 1; hudP.ellipsize = TextUtils.TruncateAt.END
         val hudCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(hudT); addView(hudP); addView(hudN) }
         hudBox.addView(hudCol, LinearLayout.LayoutParams(0, -2, 1f))
@@ -310,18 +315,18 @@ class MainActivity : Activity() {
     private fun buildSeek() {
         seekBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = roundBg(0xEE101519.toInt())
+            background = roundBg(Theme.hud)
             setPadding(dp(28), dp(16), dp(28), dp(16))
             visibility = View.GONE
         }
-        seekT = TextView(this).apply { textSize = 18f; setTextColor(0xFF6FE3C1.toInt()); maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
+        seekT = TextView(this).apply { textSize = 18f; setTextColor(Theme.accent); maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
         seekBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 1000
-            progressTintList = ColorStateList.valueOf(0xFF6FE3C1.toInt())
-            progressBackgroundTintList = ColorStateList.valueOf(0xFF3A4A54.toInt())
+            progressTintList = ColorStateList.valueOf(Theme.accent)
+            progressBackgroundTintList = ColorStateList.valueOf(Theme.stroke)
         }
         seekL = TextView(this).apply { textSize = 16f; setTextColor(Color.WHITE) }
-        seekR = TextView(this).apply { textSize = 16f; setTextColor(0xFF8A9AA5.toInt()); gravity = Gravity.END }
+        seekR = TextView(this).apply { textSize = 16f; setTextColor(Theme.gray); gravity = Gravity.END }
         val times = LinearLayout(this).apply {
             addView(seekL, LinearLayout.LayoutParams(0, -2, 1f))
             addView(seekR, LinearLayout.LayoutParams(0, -2, 1f))
@@ -370,15 +375,15 @@ class MainActivity : Activity() {
     private fun buildToast() {
         toastTv = TextView(this).apply {
             textSize = 18f; setTextColor(Color.WHITE)
-            background = roundBg(0xEE26323B.toInt())
+            background = roundBg(Theme.toast)
             setPadding(dp(20), dp(10), dp(20), dp(10)); visibility = View.GONE
         }
         val lp = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
         lp.topMargin = dp(24)
         root.addView(toastTv, lp)
         numTv = TextView(this).apply {
-            textSize = 44f; setTextColor(0xFF6FE3C1.toInt())
-            background = roundBg(0xEE101519.toInt())
+            textSize = 44f; setTextColor(Theme.accent)
+            background = roundBg(Theme.hud)
             setPadding(dp(28), dp(12), dp(28), dp(12)); visibility = View.GONE
         }
         val lpn = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END)
@@ -388,7 +393,7 @@ class MainActivity : Activity() {
 
     private fun lv(): ListView = ListView(this).apply {
         divider = null
-        selector = ColorDrawable(0x886FE3C1.toInt())
+        selector = ColorDrawable(Theme.selector)
         isFocusable = true
         adapter = RowAdapter(this@MainActivity)
     }
@@ -500,7 +505,7 @@ class MainActivity : Activity() {
     private fun focusBg(normal: Int, stroke: Int, fill: Int): StateListDrawable {
         fun shape(f: Int, st: Int, w: Int) = GradientDrawable().apply { setColor(f); setStroke(dp(w), st); cornerRadius = dp(8).toFloat() }
         return StateListDrawable().apply {
-            addState(intArrayOf(android.R.attr.state_focused), shape(fill, 0xFF6FE3C1.toInt(), 3))
+            addState(intArrayOf(android.R.attr.state_focused), shape(fill, Theme.accent, 3))
             addState(intArrayOf(), shape(normal, stroke, 1))
         }
     }
@@ -514,12 +519,12 @@ class MainActivity : Activity() {
         setPadding(dp(18), dp(8), dp(18), dp(8))
         setTextColor(ColorStateList(
             arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf(android.R.attr.state_pressed), intArrayOf()),
-            intArrayOf(0xFF06231B.toInt(), 0xFF06231B.toInt(), Color.WHITE)))
+            intArrayOf(Theme.onAccent, Theme.onAccent, Color.WHITE)))
         fun shape(f: Int, st: Int, w: Int) = GradientDrawable().apply { setColor(f); setStroke(dp(w), st); cornerRadius = dp(8).toFloat() }
         background = StateListDrawable().apply {
-            addState(intArrayOf(android.R.attr.state_focused), shape(0xFF6FE3C1.toInt(), Color.WHITE, 4))
-            addState(intArrayOf(android.R.attr.state_pressed), shape(0xFF6FE3C1.toInt(), Color.WHITE, 4))
-            addState(intArrayOf(), shape(0xFF26323B.toInt(), 0xFF3A4A54.toInt(), 1))
+            addState(intArrayOf(android.R.attr.state_focused), shape(Theme.accent, Color.WHITE, 4))
+            addState(intArrayOf(android.R.attr.state_pressed), shape(Theme.accent, Color.WHITE, 4))
+            addState(intArrayOf(), shape(Theme.btn, Theme.stroke, 1))
         }
         layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) }
     }
@@ -539,7 +544,7 @@ class MainActivity : Activity() {
     }
 
     /** Цвет подложки панелей: тёмно-серый с непрозрачностью [panelDim] %. */
-    private fun panelColor(): Int = (((panelDim * 255 + 50) / 100) shl 24) or 0x101519
+    private fun panelColor(): Int = (((panelDim * 255 + 50) / 100) shl 24) or Theme.panel
 
     private fun dimLabel() = "Затемнение подложки списков: $panelDim%  (◄ ► ±5)"
 
@@ -554,16 +559,16 @@ class MainActivity : Activity() {
     }
 
     private fun cardBg() = GradientDrawable().apply {
-        setColor(0xFF151D23.toInt()); setStroke(dp(1), 0xFF202B32.toInt()); cornerRadius = dp(14).toFloat()
+        setColor(Theme.card); setStroke(dp(1), Theme.cardStroke); cornerRadius = dp(14).toFloat()
     }
 
     private fun buildSetup() {
-        val accent = 0xFF6FE3C1.toInt()
-        val gray = 0xFF8A9AA5.toInt()
+        val accent = Theme.accent
+        val gray = Theme.gray
         fun field(h: String) = EditText(this).apply {
             setTextColor(Color.WHITE); setHintTextColor(0xFF667780.toInt()); hint = h; textSize = 15f
             setSingleLine(); inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            background = focusBg(0xFF1B252C.toInt(), 0xFF3A4A54.toInt(), 0xFF24343D.toInt())
+            background = focusBg(Theme.field, Theme.stroke, Theme.fieldFocus)
             setPadding(dp(12), dp(6), dp(12), dp(6))
         }
         fun label(t: String) = TextView(this).apply {
@@ -628,6 +633,7 @@ class MainActivity : Activity() {
             }
         }
         // размер шрифта: OK — следующее значение (шаг 10), ◄/► — ±10
+        btTheme = small(tvButton("")).apply { setOnClickListener { chooseTheme() } }
         btFont = small(tvButton("")).apply {
             setOnClickListener { setFont(if (fontPct + 10 > 160) 70 else fontPct + 10) }
             setOnKeyListener { _, k, e ->
@@ -688,6 +694,7 @@ class MainActivity : Activity() {
             addView(btType); addView(btSort); addView(btStart); addView(btDim)
             addView(dimPreview, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(6) })
             addView(btFont)
+            addView(btTheme)
             addView(tvStat)
         }
         val cols = LinearLayout(this).apply {
@@ -725,7 +732,7 @@ class MainActivity : Activity() {
             addView(tools, LinearLayout.LayoutParams(-1, -2))
             addView(bottom, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(2) })
         }
-        setup = ScrollView(this).apply { setBackgroundColor(0xFF0F1519.toInt()); visibility = View.GONE; addView(col) }
+        setup = ScrollView(this).apply { setBackgroundColor(Theme.deep); visibility = View.GONE; addView(col) }
         root.addView(setup, FrameLayout.LayoutParams(-1, -1))
         setAdvanced(false)
     }
@@ -976,18 +983,38 @@ class MainActivity : Activity() {
         btStart.text = startLabel()
         btDim.text = dimLabel()
         btFont.text = fontLabel()
+        btTheme.text = themeLabel()
         tvStat.text = "Программа передач: $epgStatus"
         setAdvanced(pl.isEmpty())   // если плейлиста нет, сразу показываем поля для ручного ввода
         showPanel(setup)
         btServer.requestFocus()
     }
 
-    private fun saveSetup() {
+    /** Сохраняет поля настроек (без перезагрузки плейлиста). */
+    private fun persistSetup() {
         val newPl = etPl.text.toString().trim()
         val ed = prefs.edit()
         if (newPl != (prefs.getString("pl", "") ?: "")) ed.remove("srvn")   // адрес изменили вручную — имя сервера уже не то
         ed.putString("pl", newPl).putString("epg", etEpg.text.toString().trim())
             .putInt("tzm", Tz.parse(etTz.text.toString())).putString("ct", ctype).putString("ua", etUa.text.toString().trim()).apply()
+    }
+
+    private fun themeLabel() = "Цветовая схема: ${Theme.current.name}"
+
+    /** Выбор цветовой схемы. Интерфейс строится один раз, поэтому экран пересоздаётся (поток перезапустится), а настройки открываются снова. */
+    private fun chooseTheme() {
+        showChoice("Цветовая схема", Theme.all.map { it.name }, Theme.all.indexOf(Theme.current)) { w ->
+            val t = Theme.all[w]
+            if (t !== Theme.current) {
+                persistSetup()
+                prefs.edit().putString("theme", t.id).putBoolean("reopen", true).apply()
+                recreate()
+            }
+        }
+    }
+
+    private fun saveSetup() {
+        persistSetup()
         Iptv.customUa = etUa.text.toString().trim()
         httpFactory.setUserAgent(Iptv.customUa.ifEmpty { Iptv.goodUa ?: Iptv.DEFAULT_UA })
         closePanels()
@@ -1334,11 +1361,11 @@ class MainActivity : Activity() {
         fun tx(t: String, size: Float, color: Int, top: Int = 0) = TextView(this).apply {
             text = t; textSize = size; setTextColor(color); setPadding(0, dp(top), 0, 0)
         }
-        val gray = 0xFF8A9AA5.toInt()
+        val gray = Theme.gray
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), dp(8), dp(24), dp(8))
-            addView(tx("Версия $ver · сборка $build", 17f, 0xFF6FE3C1.toInt()))
+            addView(tx("Версия $ver · сборка $build", 17f, Theme.accent))
             addView(tx("Разработчик: " + getString(R.string.about_dev), 16f, Color.WHITE, 4))
             addView(tx("О ПРОГРАММЕ", 12f, gray, 16))
             addView(tx(getString(R.string.about_desc), 16f, Color.WHITE, 3))
@@ -1435,6 +1462,7 @@ class MainActivity : Activity() {
                     val first = list.ch.firstOrNull { lk.isNotEmpty() && it.okey == lk } ?: list.ch.getOrElse(prefs.getInt("last", 0)) { list.ch[0] }
                     // приложение свёрнуто — не запускаем звук в фоне, onStart сам включит выбранный канал
                     if (started) playChan(first) else { cur = first; arch = null }
+                    if (reopenSetup) { reopenSetup = false; openSetup() }
                 }
                 if (gen != loadGen) return@Thread
                 plEpgUrl = list.epgUrl
