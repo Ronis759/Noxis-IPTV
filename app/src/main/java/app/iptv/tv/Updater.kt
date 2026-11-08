@@ -18,7 +18,22 @@ import java.io.IOException
  */
 object Updater {
     /** [sha256] — ожидаемая контрольная сумма APK (hex, нижний регистр). */
-    class Info(val code: Long, val tag: String, val url: String, val size: Long, val sha256: String)
+    class Info(val code: Long, val tag: String, val url: String, val size: Long, val sha256: String) {
+        /** Строка для хранения найденного обновления в настройках (значок «Обновление» переживает перезапуск). */
+        fun encode(): String = listOf(code, tag, url, size, sha256).joinToString("\n")
+
+        companion object {
+            /** Обратное к [encode]; null — строка повреждена или ссылка не https. */
+            fun decode(s: String?): Info? {
+                val p = (s ?: "").split("\n")
+                if (p.size != 5) return null
+                val code = p[0].toLongOrNull() ?: return null
+                val size = p[3].toLongOrNull() ?: return null
+                if (!p[2].startsWith("https://", true) || p[4].isEmpty()) return null
+                return Info(code, p[1], p[2], size, p[4])
+            }
+        }
+    }
 
     /** Служебный User-Agent: запросы к GitHub не участвуют в подборе UA для плейлистов. */
     private const val UA = "Noxis-IPTV-Updater"

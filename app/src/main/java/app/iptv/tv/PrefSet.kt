@@ -10,6 +10,12 @@ class PrefSet(initial: Set<String>, private val save: (Set<String>) -> Unit) {
 
     operator fun contains(s: String): Boolean = s in set
 
+    /** Очищает набор (например, «показать все скрытые группы») и сохраняет. */
+    fun clear() {
+        set.clear()
+        save(HashSet(set))
+    }
+
     /** Добавляет или убирает [s]; true — теперь элемент в наборе. */
     fun toggle(s: String): Boolean {
         val now = set.add(s)

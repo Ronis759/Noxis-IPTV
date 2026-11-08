@@ -91,14 +91,25 @@ class MainActivity : Activity() {
     private lateinit var seekT: TextView
     private lateinit var seekL: TextView
     private lateinit var seekR: TextView
-    private lateinit var gmPanel: LinearLayout
-    private lateinit var gmList: ListView
+    // левая полоса значков (обновление, настройки, архив, избранное, группы)
+    private lateinit var rail: LinearLayout
+    private lateinit var railUpd: TextView
+    private lateinit var railSet: TextView
+    private lateinit var railArc: TextView
+    private lateinit var railFav: TextView
+    private lateinit var railGrp: TextView
+    private var groupsOpen = false                             // развёрнут список групп рядом с каналами
+    private var railHintText: String? = null                   // подпись выбранного значка (показывается в заголовке списка)
+    // окно настроек
+    private lateinit var btUpd: Button
+    private lateinit var btShowAllGroups: Button
+    private lateinit var groupsBox: LinearLayout
+    private lateinit var tvGroupsInfo: TextView
     private lateinit var chTitle: TextView
     private lateinit var numTv: TextView                       // набор номера канала цифрами
     private val numBuf = StringBuilder()
     private var reopenSetup = false                            // после смены цветовой схемы вернуться в настройки
     private lateinit var btTheme: Button
-    private var moreOpen = false                               // раскрыто меню «Ещё» в левой колонке
     private var query = ""                                     // текст поиска каналов
     private val history = ArrayList<String>()                  // история просмотра: Channel.okey, свежие первыми
     private val resume = LinkedHashMap<String, Long>()         // позиции в архиве: «okey@начало» -> мс
@@ -108,7 +119,7 @@ class MainActivity : Activity() {
     private var fontPct = 100
     private lateinit var btFont: Button
     private var epgStatus = "не загружена"
-        set(v) { field = v; if (::chTitle.isInitialized) chTitle.text = "Каналы   ·   программа: $v" }
+        set(v) { field = v; Session.epgStatus = v; refreshTitle() }
     @Volatile private var loadGen = 0      // номер текущей загрузки плейлиста: устаревшие потоки ничего не публикуют
     private var started = false            // между onStart и onStop
     @Volatile private var plEpgUrl = ""   // адрес программы из заголовка плейлиста (url-tvg)
@@ -257,10 +268,10 @@ class MainActivity : Activity() {
         }
         panelDim = prefs.getInt("dim", 95).coerceIn(DIM_MIN, 100)
         repo = Repository(this, prefs)
-        updates = UpdateFlow(this, prefs) { toast(it) }
+        updates = UpdateFlow(this, prefs, { toast(it) }) { runOnUiThread { refreshRail(); refreshUpdateUi() } }
         favs = PrefSet(prefs.getStringSet("fav", emptySet()) ?: emptySet()) { prefs.edit().putStringSet("fav", HashSet(it)).apply() }
         hiddenGroups = PrefSet(prefs.getStringSet("hg", emptySet()) ?: emptySet()) { prefs.edit().putStringSet("hg", HashSet(it)).apply() }
-        buildHud(); buildSeek(); buildPanels(); buildSetup(); buildServers(); buildGroupMgr(); buildToast(); applyFont()
+        buildHud(); buildSeek(); buildPanels(); buildSetup(); buildServers(); buildToast(); applyFont()
         // тип архива по умолчанию — flussonic (один раз переводим и ранее сохранённое значение по умолчанию)
         if (prefs.getInt("ctv", 0) < 1) prefs.edit().putString("ct", "flussonic").putInt("ctv", 1).apply()
         ctype = prefs.getString("ct", "flussonic") ?: "flussonic"
@@ -269,13 +280,17 @@ class MainActivity : Activity() {
         // по умолчанию — сетевой плейлист, а не локальный файл
         if (prefs.getString("pl", "") == "local" && getString(R.string.default_playlist).isNotEmpty())
             prefs.edit().putString("pl", getString(R.string.default_playlist)).putString("epg", getString(R.string.default_epg)).apply()
+        // после смены цветовой схемы (recreate) плейлист и программа берутся из памяти, без сети
+        val keep = Session.keep && Session.chans.isNotEmpty() && Session.pl == (prefs.getString("pl", "") ?: "")
+        Session.keep = false
         if (prefs.getString("pl", "").isNullOrEmpty()) {
             val d = getString(R.string.default_playlist)
             if (d.isNotEmpty()) {
                 prefs.edit().putString("pl", d).putString("epg", getString(R.string.default_epg)).apply()
                 loadAll()
             } else openSetup()
-        } else loadAll()
+        } else if (keep) restoreSession() else loadAll()
+        refreshRail()
         updates.check(false)
     }
 
@@ -419,50 +434,19 @@ class MainActivity : Activity() {
         grpList = lv(); chList = lv(); dayList = lv(); progList = lv()
         (chList.adapter as RowAdapter).icons = true
         chTitle = TextView(this).apply { textSize = 20f; maxLines = 2; text = "Каналы   ·   программа: $epgStatus" }
-        chPanel = panel(chTitle, grpList, chList, 0.43f, Gravity.START)
+        buildChPanel()
         arTitle = TextView(this)
         arPanel = panel(arTitle, dayList, progList, 0.57f, Gravity.END)
 
-        // левая колонка (настройки и группы): узкая, со значками; раскрывается, когда в неё переходит фокус
-        setGroupsExpanded(false)
-        grpList.onFocusChangeListener = View.OnFocusChangeListener { _, has -> setGroupsExpanded(has) }
-        grpList.onItemClickListener = AdapterView.OnItemClickListener { _, _, pos, _ ->
-            val r = ad(grpList).row(pos)
-            when (r.tag) {
-                "set" -> openSetup()
-                "more" -> {
-                    moreOpen = !moreOpen
-                    ad(grpList).set(groupRows())
-                    grpList.setSelection(pos)
-                }
-                "srv" -> openServers()
-                "mgr" -> openGroupMgr()
-                "arc" -> if (cur != null) openArch() else toast("Сначала выберите канал")
-                "find" -> openSearch()
-                "opt" -> openPlayerOptions()
-                else -> {
-                    grp = r.title
-                    prefs.edit().putString("lgrp", grp).apply()
-                    ad(grpList).active = grp
-                    ad(grpList).notifyDataSetChanged()
-                    renderChans()
-                    if (shown.isEmpty()) toast(when (grp) {
-                        G_FAV -> "Избранное пусто. Удерживайте OK на канале"
-                        G_HIST -> "История пуста"
-                        else -> "В группе нет каналов"
-                    })
-                    else chList.requestFocus()
-                }
-            }
-        }
-        // удержание OK на группе — скрыть её
+        // группы каналов: список свёрнут и разворачивается значком ☰ в левой полосе; OK — показать группу
+        grpList.onItemClickListener = AdapterView.OnItemClickListener { _, _, pos, _ -> selectGroup(ad(grpList).row(pos).title) }
+        // удержание OK на группе — скрыть её (вернуть: Настройки → Группы каналов)
         grpList.onItemLongClickListener = AdapterView.OnItemLongClickListener { _, _, pos, _ ->
             val r = ad(grpList).row(pos)
             if (r.tag == "g") {
                 toggleGroup(r.title)
-                toast("Группа скрыта: ${r.title}. Вернуть: ☰ Группы…")
-                ad(grpList).set(groupRows())
-                renderChans()
+                toast("Группа скрыта: ${r.title}. Вернуть: Настройки → Группы каналов")
+                onGroupsChanged()
                 grpList.setSelection(minOf(pos, ad(grpList).getCount() - 1))
             }
             true
@@ -529,18 +513,136 @@ class MainActivity : Activity() {
         layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) }
     }
 
-    private fun setGroupsExpanded(on: Boolean) {
-        // раскрытая колонка вдвое шире прежней (≈29 % экрана вместо ≈14 %); панель при этом расширяется, чтобы список каналов не сжимался
+    /** Левая панель: тонкая полоса значков и справа — группы (свёрнуты) и список каналов. */
+    private fun buildChPanel() {
         val w = resources.displayMetrics.widthPixels
-        val lp = grpList.layoutParams as LinearLayout.LayoutParams
-        if (on) { lp.width = (w * 0.29f).toInt(); lp.weight = 0f } else { lp.width = dp(72); lp.weight = 0f }
-        grpList.layoutParams = lp
-        if (::chPanel.isInitialized) {
-            val pl = chPanel.layoutParams
-            pl.width = (w * (if (on) 0.64f else 0.43f)).toInt()
-            chPanel.layoutParams = pl
+        railUpd = railBtn("⇧", "Обновление") { updates.promptInstall() }
+        railSet = railBtn("⚙", "Настройки") { openSetup() }
+        railArc = railBtn("↺", "Архив") { if (cur != null) openArch() else toast("Сначала выберите канал") }
+        railFav = railBtn("★", "Избранное") { selectGroup(G_FAV) }
+        railGrp = railBtn("☰", "Группы каналов") { toggleGroupsOpen() }
+        rail = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setBackgroundColor(Theme.deep)
+            setPadding(dp(6), dp(16), dp(6), dp(16))
+            for (b in listOf(railUpd, railSet, railArc, railFav, railGrp)) addView(b)
         }
-        ad(grpList).compact = !on
+        chTitle.setTextColor(Color.WHITE); chTitle.setPadding(0, 0, 0, dp(10))
+        val lists = LinearLayout(this).apply {
+            addView(grpList, LinearLayout.LayoutParams((w * 0.22f).toInt(), -1))
+            addView(chList, LinearLayout.LayoutParams(0, -1, 1f))
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(20), dp(20), dp(20))
+            addView(chTitle)
+            addView(lists, LinearLayout.LayoutParams(-1, 0, 1f))
+        }
+        chPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(panelColor())
+            visibility = View.GONE
+            addView(rail, LinearLayout.LayoutParams(dp(68), -1))
+            addView(content, LinearLayout.LayoutParams(0, -1, 1f))
+        }
+        root.addView(chPanel, FrameLayout.LayoutParams((w * 0.43f).toInt(), -1, Gravity.START))
+        setGroupsOpen(false)
+    }
+
+    /** Значок левой полосы: только пиктограмма; подпись показывается в заголовке списка, пока значок выбран. */
+    private fun railBtn(glyph: String, hint: String, onClick: () -> Unit): TextView = TextView(this).apply {
+        text = glyph; textSize = 26f; gravity = Gravity.CENTER
+        isFocusable = true; isClickable = true
+        contentDescription = hint
+        layoutParams = LinearLayout.LayoutParams(dp(54), dp(54)).apply { topMargin = dp(8) }
+        setOnClickListener { onClick() }
+        onFocusChangeListener = View.OnFocusChangeListener { _, has ->
+            if (has) setRailHint(hint) else if (!railFocused()) setRailHint(null)
+        }
+    }
+
+    private fun railFocused() = listOf(railUpd, railSet, railArc, railFav, railGrp).any { it.isFocused }
+
+    private fun setRailHint(t: String?) { railHintText = t; refreshTitle() }
+
+    /** Заголовок списка каналов: название группы и состояние программы; у выбранного значка полосы — его название. */
+    private fun refreshTitle() {
+        if (!::chTitle.isInitialized) return
+        val head = when (grp) { G_ALL -> "Все каналы"; G_FIND -> "Поиск «$query»"; else -> grp }
+        chTitle.text = railHintText ?: "$head   ·   программа: $epgStatus"
+    }
+
+    /** Обновляет вид значков: значок «Обновление» виден только при найденной новой версии, у выбранного режима — рамка. */
+    private fun refreshRail() {
+        if (!::railGrp.isInitialized || !::updates.isInitialized) return
+        railUpd.visibility = if (updates.available != null) View.VISIBLE else View.GONE
+        styleRail(railUpd, false, true)
+        styleRail(railSet, false)
+        styleRail(railArc, false)
+        styleRail(railFav, grp == G_FAV)
+        styleRail(railGrp, groupsOpen || grp != G_FAV)
+    }
+
+    private fun styleRail(v: TextView, active: Boolean, special: Boolean = false) {
+        fun shape(f: Int, st: Int, wd: Int) = GradientDrawable().apply { setColor(f); setStroke(dp(wd), st); cornerRadius = dp(12).toFloat() }
+        v.background = StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_focused), shape(Theme.accent, Color.WHITE, 3))
+            addState(intArrayOf(), when {
+                special -> shape(Theme.accent, Theme.accent, 1)
+                active -> shape(Theme.card, Theme.accent, 2)
+                else -> shape(Theme.btn, Theme.stroke, 1)
+            })
+        }
+        val idle = if (special) Theme.onAccent else if (active) Theme.accent else Color.WHITE
+        v.setTextColor(ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(Theme.onAccent, idle)))
+    }
+
+    /** Разворачивает / сворачивает список групп рядом с каналами; панель при этом расширяется, чтобы каналы не сжимались. */
+    private fun setGroupsOpen(on: Boolean) {
+        groupsOpen = on
+        grpList.visibility = if (on) View.VISIBLE else View.GONE
+        val lp = chPanel.layoutParams
+        lp.width = (resources.displayMetrics.widthPixels * (if (on) 0.62f else 0.43f)).toInt()
+        chPanel.layoutParams = lp
+        refreshRail()
+    }
+
+    private fun toggleGroupsOpen() {
+        if (groupsOpen) { setGroupsOpen(false); railGrp.requestFocus(); return }
+        val rows = groupRows()
+        ad(grpList).active = grp
+        ad(grpList).set(rows)
+        setGroupsOpen(true)
+        grpList.setSelection(rows.indexOfFirst { it.title == grp }.coerceAtLeast(0))
+        grpList.requestFocus()
+    }
+
+    /** Показывает каналы группы [g] (в том числе избранное), сворачивает список групп и переводит фокус на каналы. */
+    private fun selectGroup(g: String) {
+        grp = g
+        prefs.edit().putString("lgrp", g).apply()
+        setGroupsOpen(false)
+        ad(grpList).active = g
+        ad(grpList).notifyDataSetChanged()
+        renderChans()
+        refreshRail()
+        if (shown.isEmpty()) {
+            toast(when (g) {
+                G_FAV -> "Избранное пусто. Удерживайте OK на канале"
+                G_HIST -> "История пуста"
+                else -> "В группе нет каналов"
+            })
+            (if (g == G_FAV) railFav else railGrp).requestFocus()
+        } else chList.requestFocus()
+    }
+
+    /** Показ или скрытие группы изменилось: обновляем список групп, каналы и значки. */
+    private fun onGroupsChanged() {
+        zap = emptyList()
+        ad(grpList).set(groupRows())
+        renderChans()
+        refreshRail()
     }
 
     /** Цвет подложки панелей: тёмно-серый с непрозрачностью [panelDim] %. */
@@ -553,7 +655,7 @@ class MainActivity : Activity() {
         panelDim = v.coerceIn(DIM_MIN, 100)
         prefs.edit().putInt("dim", panelDim).apply()
         val c = panelColor()
-        for (p in listOf(chPanel, arPanel, gmPanel, srvPanel)) p.setBackgroundColor(c)
+        for (p in listOf(chPanel, arPanel, srvPanel)) p.setBackgroundColor(c)
         dimOverlay.setBackgroundColor(c)
         btDim.text = dimLabel()
     }
@@ -599,18 +701,34 @@ class MainActivity : Activity() {
                 })
             }
         }
+        fun gap() = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) }
 
         etPl = field("http://…/playlist.m3u")
         etEpg = field("пусто = адрес из плейлиста (url-tvg)")
         etTz = field("0, 3, 5.5 или 5:30").apply { inputType = InputType.TYPE_CLASS_TEXT }
         etUa = field("пусто = автоподбор (VLC, okhttp, Mozilla…)")
 
+        // ----- Источник -----
         tvSrv = TextView(this).apply {
             textSize = 18f; setTextColor(Color.WHITE); setPadding(dp(2), 0, 0, dp(2))
             maxLines = 1; ellipsize = TextUtils.TruncateAt.END
         }
-        btServer = small(tvButton("Выбрать сервер")).apply { setOnClickListener { openServers() } }
+        btServer = small(tvButton("⇄ Выбрать сервер")).apply { setOnClickListener { openServers() } }
         val btFile = small(tvButton("Загрузить файл…")).apply { setOnClickListener { pickFile() } }
+        val btReload = small(tvButton("Обновить плейлист")).apply {
+            setOnClickListener { if (applySource(true) == 2) closePanels() }
+        }
+        // «Применить» перезагружает только то, что изменилось: ссылка плейлиста — плейлист; программа или часовой пояс — только программу
+        val btApply = small(tvButton("Применить")).apply {
+            gravity = Gravity.CENTER
+            setOnClickListener {
+                when (applySource()) {
+                    2 -> closePanels()
+                    0 -> toast("Изменений нет")
+                    else -> {}
+                }
+            }
+        }
         advBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
@@ -618,11 +736,20 @@ class MainActivity : Activity() {
             addView(label("Программа передач (XMLTV)")); addView(etEpg)
             addView(label("User-Agent (если сервер отвечает 403)")); addView(etUa)
             addView(label("Часовой пояс программы, ч от UTC (если не указан в EPG)")); addView(etTz)
+            addView(btApply)
         }
         btAdv = small(tvButton("")).apply { setOnClickListener { setAdvanced(advBox.visibility != View.VISIBLE) } }
 
+        // ----- Воспроизведение -----
         btType = small(tvButton("")).apply {
-            setOnClickListener { ctype = types[(types.indexOf(ctype) + 1) % types.size]; text = typeLabel() }
+            setOnClickListener { ctype = types[(types.indexOf(ctype) + 1) % types.size]; prefs.edit().putString("ct", ctype).apply(); text = typeLabel() }
+        }
+        val btSound = small(tvButton("♫ Звук, субтитры, формат")).apply { setOnClickListener { openPlayerOptions() } }
+        val btFindCh = small(tvButton("⌕ Поиск канала…")).apply { setOnClickListener { openSearch() } }
+
+        // ----- Список каналов -----
+        btSort = small(tvButton("")).apply {
+            setOnClickListener { setSort(sorts[(sorts.indexOf(sortMode) + 1) % sorts.size]) }
         }
         btStart = small(tvButton("")).apply {
             setOnClickListener {
@@ -632,8 +759,10 @@ class MainActivity : Activity() {
                 text = startLabel()
             }
         }
-        // размер шрифта: OK — следующее значение (шаг 10), ◄/► — ±10
+
+        // ----- Оформление: всё применяется сразу, перезагрузки нет -----
         btTheme = small(tvButton("")).apply { setOnClickListener { chooseTheme() } }
+        // размер шрифта: OK — следующее значение (шаг 10), ◄/► — ±10
         btFont = small(tvButton("")).apply {
             setOnClickListener { setFont(if (fontPct + 10 > 160) 70 else fontPct + 10) }
             setOnKeyListener { _, k, e ->
@@ -642,9 +771,6 @@ class MainActivity : Activity() {
                     true
                 } else false
             }
-        }
-        btSort = small(tvButton("")).apply {
-            setOnClickListener { setSort(sorts[(sorts.indexOf(sortMode) + 1) % sorts.size]) }
         }
         // затемнение подложки: OK — следующее значение (шаг 10), ◄/► — точная подстройка на 5 %
         btDim = small(tvButton("")).apply {
@@ -670,47 +796,68 @@ class MainActivity : Activity() {
             background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xFF2E86AB.toInt(), 0xFFF6C85F.toInt(), 0xFFE4572E.toInt()))
             addView(dimOverlay, FrameLayout.LayoutParams(-1, -1).apply { leftMargin = dp(70) })
         }
-        tvStat = TextView(this).apply { textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(10), 0, 0) }
 
+        // ----- Система -----
+        tvStat = TextView(this).apply { textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(10), 0, 0) }
         val btEpg = small(tvButton("Обновить программу передач")).apply {
             setOnClickListener {
                 if (chans.isEmpty()) { toast("Сначала загрузите плейлист") } else {
                     toast("Загрузка программы передач…")
+                    epgStatus = "загрузка…"
                     val tzv = Tz.parse(etTz.text.toString())
                     prefs.edit().putString("epg", etEpg.text.toString().trim()).putInt("tzm", tzv).apply()
-                    Thread { loadEpgNow(chans, plEpgUrl, true, tzv) }.start()
+                    val cs = chans; val g = loadGen
+                    Thread { loadEpgNow(cs, plEpgUrl, true, tzv, g) }.start()
                 }
             }
         }
-        val btUpd = small(tvButton("Проверить обновления")).apply { setOnClickListener { updates.check(true) } }
+        btUpd = small(tvButton("Проверить обновления")).apply { setOnClickListener { updates.check(true) } }
         val btAbout = small(tvButton("О программе")).apply { setOnClickListener { showAbout() } }
 
-        val left = card("Источник").apply {
+        val srcCard = card("Источник").apply {
             addView(label("Текущий сервер")); addView(tvSrv)
             addView(row(btServer, btFile))
+            addView(btReload)
             addView(btAdv); addView(advBox)
         }
-        val right = card("Параметры").apply {
-            addView(btType); addView(btSort); addView(btStart); addView(btDim)
+        val playCard = card("Воспроизведение").apply { addView(btType); addView(btSound); addView(btFindCh) }
+        val lookCard = card("Оформление").apply {
+            addView(btTheme); addView(btFont); addView(btDim)
             addView(dimPreview, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(6) })
-            addView(btFont)
-            addView(btTheme)
-            addView(tvStat)
+        }
+        val listCard = card("Список каналов").apply { addView(btSort); addView(btStart) }
+        val sysCard = card("Система").apply { addView(btEpg); addView(btUpd); addView(btAbout); addView(tvStat) }
+
+        val colL = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(srcCard); addView(playCard, gap())
+        }
+        val colR = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(lookCard); addView(listCard, gap()); addView(sysCard, gap())
         }
         val cols = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(left, LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(8) })
-            addView(right, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(8) })
+            addView(colL, LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(8) })
+            addView(colR, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(8) })
         }
-        val tools = row(btEpg, btUpd, btAbout)
 
-        val save = tvButton("Сохранить и загрузить").apply { gravity = Gravity.CENTER; setOnClickListener { saveSetup() } }
-        val cancel = tvButton("Отмена").apply { gravity = Gravity.CENTER; setOnClickListener { if (chans.isNotEmpty()) closePanels() } }
-        val bottom = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            addView(save, LinearLayout.LayoutParams(0, -2, 2f).apply { rightMargin = dp(8) })
-            addView(cancel, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(8) })
+        // ----- Группы каналов: нажатие — показать / скрыть -----
+        groupsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        tvGroupsInfo = TextView(this).apply { textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(8), 0, dp(2)) }
+        btShowAllGroups = small(tvButton("Показать все группы")).apply {
+            gravity = Gravity.CENTER
+            setOnClickListener {
+                hiddenGroups.clear()
+                onGroupsChanged()
+                renderGroupsCard(if (groups.isEmpty()) -1 else 0)
+            }
         }
+        val groupsCard = card("Группы каналов").apply {
+            addView(tvGroupsInfo); addView(btShowAllGroups); addView(groupsBox)
+        }
+
+        val btClose = tvButton("Закрыть").apply { gravity = Gravity.CENTER; setOnClickListener { closeSetup() } }
 
         val ver = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (e: Exception) { "?" }
         val build = try { Updater.installedCode(this) } catch (e: Exception) { 0L }
@@ -729,23 +876,63 @@ class MainActivity : Activity() {
             setPadding(dp(32), dp(16), dp(32), dp(16))
             addView(header)
             addView(cols, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
-            addView(tools, LinearLayout.LayoutParams(-1, -2))
-            addView(bottom, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(2) })
+            addView(groupsCard, gap())
+            addView(btClose, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
         }
         setup = ScrollView(this).apply { setBackgroundColor(Theme.deep); visibility = View.GONE; addView(col) }
         root.addView(setup, FrameLayout.LayoutParams(-1, -1))
         setAdvanced(false)
     }
 
+    /** Кнопка-«плитка» группы: ✓ показана, ✗ скрыта. */
+    private fun groupChip(name: String, count: Int, hidden: Boolean): Button =
+        tvButton((if (hidden) "✗  " else "✓  ") + name + "  ($count)").apply {
+            textSize = 15f; minHeight = dp(44); minimumHeight = dp(44)
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            maxLines = 1; ellipsize = TextUtils.TruncateAt.END
+            if (hidden) setTextColor(ColorStateList(
+                arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(Theme.onAccent, Theme.gray)))
+        }
+
+    /** Перерисовывает карточку «Группы каналов» в настройках; [focusIdx] — плитка, на которую вернуть фокус. */
+    private fun renderGroupsCard(focusIdx: Int = -1) {
+        if (!::groupsBox.isInitialized) return
+        groupsBox.removeAllViews()
+        val hid = groups.count { it in hiddenGroups }
+        tvGroupsInfo.text = if (groups.isEmpty()) "Групп пока нет — загрузите плейлист"
+        else "Всего: ${groups.size} · скрыто: $hid · OK — показать или скрыть группу"
+        btShowAllGroups.visibility = if (hid > 0) View.VISIBLE else View.GONE
+        val counts = chans.groupingBy { it.group }.eachCount()
+        val perRow = 3
+        val chips = ArrayList<Button>()
+        var i = 0
+        while (i < groups.size) {
+            val line = LinearLayout(this)
+            for (k in 0 until perRow) {
+                val idx = i + k
+                val lp = LinearLayout.LayoutParams(0, -2, 1f).apply { topMargin = dp(6); if (k > 0) leftMargin = dp(8) }
+                if (idx < groups.size) {
+                    val g = groups[idx]
+                    val b = groupChip(g, counts[g] ?: 0, g in hiddenGroups)
+                    b.setOnClickListener { toggleGroup(g); onGroupsChanged(); renderGroupsCard(idx) }
+                    chips.add(b)
+                    line.addView(b, lp)
+                } else line.addView(View(this), lp)   // пустое место, чтобы плитки в последней строке не растягивались
+            }
+            groupsBox.addView(line)
+            i += perRow
+        }
+        if (focusIdx >= 0) chips.getOrNull(focusIdx)?.requestFocus()
+    }
+
     private fun showPanel(p: View?) {
         chPanel.visibility = View.GONE; arPanel.visibility = View.GONE; setup.visibility = View.GONE; srvPanel.visibility = View.GONE
-        gmPanel.visibility = View.GONE
         hudBox.visibility = View.GONE
         seekBox.visibility = View.GONE
         p?.visibility = View.VISIBLE
     }
     private fun closePanels() = showPanel(null)
-    private fun panelOpen() = chPanel.visibility == View.VISIBLE || arPanel.visibility == View.VISIBLE || setup.visibility == View.VISIBLE || srvPanel.visibility == View.VISIBLE || gmPanel.visibility == View.VISIBLE
+    private fun panelOpen() = chPanel.visibility == View.VISIBLE || arPanel.visibility == View.VISIBLE || setup.visibility == View.VISIBLE || srvPanel.visibility == View.VISIBLE
 
     private fun toast(t: String) {
         toastTv.text = t; toastTv.visibility = View.VISIBLE
@@ -773,26 +960,19 @@ class MainActivity : Activity() {
         ad(grpList).set(groupRows())
         renderChans()
         showPanel(chPanel)
+        setGroupsOpen(false)   // группы свёрнуты: разворачиваются значком ☰
+        setRailHint(null)
+        refreshRail()
         chList.setSelection(shown.indexOfFirst { it === cur }.coerceAtLeast(0))
         chList.requestFocus()
+        updates.check(false)   // не чаще раза в 6 часов; найденное обновление покажет значок в левой полосе
     }
 
+    /** Строки развёрнутого списка групп: «Все», история и нескрытые группы (избранное — отдельный значок ★). */
     private fun groupRows(): List<Row> {
-        val hid = groups.count { it in hiddenGroups }
         val l = ArrayList<Row>()
-        l.add(Row("⚙ Настройки", tag = "set", short = "⚙"))
-        // раскрывающееся меню под «Настройками»: сервер, поиск, звук
-        l.add(Row(if (moreOpen) "▾ Ещё" else "▸ Ещё", tag = "more", short = if (moreOpen) "▾" else "▸"))
-        if (moreOpen) {
-            l.add(Row("⇄ Сервер", tag = "srv", short = "⇄"))
-            l.add(Row(G_FIND, if (query.isNotEmpty()) "«$query»" else "", "find", short = "⌕"))
-            l.add(Row("♫ Звук, субтитры, формат", tag = "opt", short = "♫"))
-        }
-        l.add(Row("↺ Архив", tag = "arc", short = "↺"))
-        l.add(Row("☰ Группы…", if (hid > 0) "скрыто: $hid" else "", "mgr", short = "☰"))
-        l.add(Row(G_FAV, tag = "fav", short = "★"))
-        l.add(Row(G_HIST, tag = "hist", short = "◷"))
-        l.add(Row(G_ALL, tag = "all", short = "▤"))
+        l.add(Row(G_ALL, tag = "all"))
+        l.add(Row(G_HIST, tag = "hist"))
         for (g in groups) if (g !in hiddenGroups) l.add(Row(g, tag = "g"))
         return l
     }
@@ -857,6 +1037,7 @@ class MainActivity : Activity() {
         else all.filter { it.group == grp }
         val sel = if (moving) chList.selectedItemPosition else -1
         ad(chList).set(shown.mapIndexed { i, it -> Row((if (i == sel) "⇅ " else if (it === cur) "▶ " else "") + (if (isFav(it)) "★ " else "") + it.name, nowProg(it)?.title ?: "", it, false, it.logo) })
+        refreshTitle()
     }
 
     /* ---------- избранное и скрытые группы ---------- */
@@ -881,41 +1062,6 @@ class MainActivity : Activity() {
         zap = emptyList()
     }
 
-    private fun buildGroupMgr() {
-        gmList = lv()
-        gmPanel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(panelColor())
-            setPadding(dp(20), dp(20), dp(20), dp(20))
-            visibility = View.GONE
-            addView(TextView(this@MainActivity).apply { text = "Группы каналов — OK: показать / скрыть"; textSize = 24f; setTextColor(Color.WHITE); setPadding(0, 0, 0, dp(10)) })
-            addView(gmList, LinearLayout.LayoutParams(-1, 0, 1f))
-        }
-        root.addView(gmPanel, FrameLayout.LayoutParams((resources.displayMetrics.widthPixels * 0.6f).toInt(), -1, Gravity.CENTER_HORIZONTAL))
-        gmList.onItemClickListener = AdapterView.OnItemClickListener { _, _, pos, _ ->
-            val g = ad(gmList).row(pos).tag as? String
-            if (g != null) {
-                toggleGroup(g)
-                renderGroupMgr()
-                gmList.setSelection(pos)
-            }
-        }
-    }
-
-    private fun renderGroupMgr() {
-        ad(gmList).set(groups.map { g ->
-            val hid = g in hiddenGroups
-            Row((if (hid) "✗  " else "✓  ") + g, "каналов: " + chans.count { it.group == g } + (if (hid) " · скрыта" else ""), g, hid)
-        })
-    }
-
-    private fun openGroupMgr() {
-        if (groups.isEmpty()) { toast("Групп нет"); return }
-        renderGroupMgr()
-        showPanel(gmPanel)
-        gmList.requestFocus()
-    }
-
     /** [keepChannels] — телепрограмма открывается справа от списка каналов, список остаётся на экране. */
     private fun openArch(ch: Channel? = cur, keepChannels: Boolean = false) {
         val c = ch ?: return
@@ -927,7 +1073,7 @@ class MainActivity : Activity() {
             Row(when (i) { 0 -> "Сегодня"; 1 -> "Вчера"; else -> f.format(Date(System.currentTimeMillis() - i * 86400000L)) })
         })
         dayOff = 0
-        if (keepChannels) { hudBox.visibility = View.GONE; seekBox.visibility = View.GONE; arPanel.visibility = View.VISIBLE }
+        if (keepChannels) { setGroupsOpen(false); hudBox.visibility = View.GONE; seekBox.visibility = View.GONE; arPanel.visibility = View.VISIBLE }
         else showPanel(arPanel)
         renderProgs()
         progList.requestFocus()
@@ -986,7 +1132,10 @@ class MainActivity : Activity() {
         btTheme.text = themeLabel()
         tvStat.text = "Программа передач: $epgStatus"
         setAdvanced(pl.isEmpty())   // если плейлиста нет, сразу показываем поля для ручного ввода
+        renderGroupsCard()
+        refreshUpdateUi()
         showPanel(setup)
+        setup.scrollTo(0, 0)
         btServer.requestFocus()
     }
 
@@ -1001,24 +1150,67 @@ class MainActivity : Activity() {
 
     private fun themeLabel() = "Цветовая схема: ${Theme.current.name}"
 
-    /** Выбор цветовой схемы. Интерфейс строится один раз, поэтому экран пересоздаётся (поток перезапустится), а настройки открываются снова. */
+    /**
+     * Выбор цветовой схемы. Цвета задаются при построении интерфейса, поэтому экран пересоздаётся;
+     * плейлист и программа передач при этом остаются в [Session] и заново не загружаются (поток запускается снова).
+     */
     private fun chooseTheme() {
         showChoice("Цветовая схема", Theme.all.map { it.name }, Theme.all.indexOf(Theme.current)) { w ->
             val t = Theme.all[w]
             if (t !== Theme.current) {
                 persistSetup()
                 prefs.edit().putString("theme", t.id).putBoolean("reopen", true).apply()
+                Session.keep = true
                 recreate()
             }
         }
     }
 
-    private fun saveSetup() {
-        persistSetup()
-        Iptv.customUa = etUa.text.toString().trim()
-        httpFactory.setUserAgent(Iptv.customUa.ifEmpty { Iptv.goodUa ?: Iptv.DEFAULT_UA })
+    /**
+     * Применяет поля источника и перезагружает только то, что изменилось: другая ссылка плейлиста
+     * (или [forcePlaylist], или список каналов пуст) — плейлист; другой адрес программы или часовой пояс — только программу.
+     * Результат: 2 — запущена загрузка плейлиста, 1 — только программы передач, 0 — ничего не изменилось.
+     * Остальные настройки (шрифт, тема, порядок, группы…) применяются сразу и сами ничего не перезагружают.
+     */
+    private fun applySource(forcePlaylist: Boolean = false): Int {
+        val oldPl = prefs.getString("pl", "") ?: ""
+        val oldEpg = prefs.getString("epg", "") ?: ""
+        val oldTz = tzMin()
+        val oldUa = prefs.getString("ua", "") ?: ""
+        val newPl = etPl.text.toString().trim()
+        val newEpg = etEpg.text.toString().trim()
+        val newTz = Tz.parse(etTz.text.toString())
+        val newUa = etUa.text.toString().trim()
+        val ed = prefs.edit()
+        if (newPl != oldPl) ed.remove("srvn")   // адрес изменили вручную — имя сервера уже не то
+        ed.putString("pl", newPl).putString("epg", newEpg).putInt("tzm", newTz).putString("ct", ctype).putString("ua", newUa).apply()
+        if (newUa != oldUa) {
+            Iptv.customUa = newUa
+            httpFactory.setUserAgent(newUa.ifEmpty { Iptv.goodUa ?: Iptv.DEFAULT_UA })
+        }
+        if (newPl.isNotEmpty() && (newPl != oldPl || forcePlaylist || chans.isEmpty())) { loadAll(false); return 2 }
+        if (chans.isNotEmpty() && (newEpg != oldEpg || newTz != oldTz)) {
+            toast("Загрузка программы передач…")
+            epgStatus = "загрузка…"
+            val cs = chans; val g = loadGen
+            Thread { loadEpgNow(cs, plEpgUrl, false, newTz, g) }.start()
+            return 1
+        }
+        return 0
+    }
+
+    /** Закрывает настройки; изменённые поля источника применяются. */
+    private fun closeSetup() {
+        if (chans.isEmpty() && etPl.text.toString().trim().isEmpty()) { toast("Выберите сервер или впишите ссылку на плейлист"); return }
+        applySource()
         closePanels()
-        loadAll(true)
+    }
+
+    /** Подпись кнопки обновления в настройках: найденная новая версия или обычная проверка. */
+    private fun refreshUpdateUi() {
+        if (!::btUpd.isInitialized || !::updates.isInitialized) return
+        val i = updates.available
+        btUpd.text = if (i != null) "⇧ Установить обновление (сборка ${i.code})" else "Проверить обновления"
     }
 
     /* ---------- размер шрифта ---------- */
@@ -1039,7 +1231,7 @@ class MainActivity : Activity() {
         seekT.textSize = 18f * f; seekL.textSize = 16f * f; seekR.textSize = 16f * f
         toastTv.textSize = 18f * f
         chTitle.textSize = 20f * f; arTitle.textSize = 24f * f
-        for (l in listOf(grpList, chList, dayList, progList, srvList, gmList)) ad(l).notifyDataSetChanged()
+        for (l in listOf(grpList, chList, dayList, progList, srvList)) ad(l).notifyDataSetChanged()
     }
 
     /* ---------- пропорции картинки ---------- */
@@ -1334,9 +1526,12 @@ class MainActivity : Activity() {
         srvList.onItemClickListener = AdapterView.OnItemClickListener { _, _, pos, _ ->
             val sv = ad(srvList).row(pos).tag as? Server
             if (sv != null) {
+                // тот же сервер выбран повторно: ничего не перезагружаем (обновить плейлист — в настройках)
+                val same = sv.pl == (prefs.getString("pl", "") ?: "") && sv.epg == (prefs.getString("epg", "") ?: "") && chans.isNotEmpty()
                 prefs.edit().putString("pl", sv.pl).putString("epg", sv.epg).putString("srvn", sv.name).apply()
                 closePanels()
-                loadAll(true)
+                // программа скачивается заново сама, если у нового сервера другой её адрес; принудительно — только по кнопке в настройках
+                if (same) toast("Этот сервер уже выбран") else loadAll(false)
             }
         }
     }
@@ -1418,7 +1613,7 @@ class MainActivity : Activity() {
                     val isPlaylist = repo.importText(t)
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
-                        if (isPlaylist) { closePanels(); loadAll(true) }
+                        if (isPlaylist) { closePanels(); loadAll(false) }
                         else if (Iptv.parseServers(t).isEmpty()) toast("В файле нет адресов. Формат: Название | http://… | EPG")
                         else openServers()
                     }
@@ -1432,11 +1627,48 @@ class MainActivity : Activity() {
     }
 
     /* ---------- загрузка данных ---------- */
+    /** Показывает каналы: группа при запуске, текущий канал, значки меню. Вызывать из потока интерфейса. */
+    private fun applyChannels(ch: List<Channel>, msg: String) {
+        chans = ch
+        groups = ch.map { it.group }.distinct()
+        val sm = prefs.getString("start", "fav")
+        val lg = prefs.getString("lgrp", G_ALL) ?: G_ALL
+        val startFav = sm == "fav" && ch.any { isFav(it) }
+        grp = when {
+            startFav -> G_FAV
+            sm == "last" && (lg == G_FAV || lg == G_HIST || (lg in groups && lg !in hiddenGroups)) -> lg
+            else -> G_ALL
+        }
+        zap = if (startFav) ordered().filter { isFav(it) } else emptyList()
+        if (msg.isNotEmpty()) toast(msg)
+        val lk = prefs.getString("lastk", "") ?: ""
+        val first = ch.firstOrNull { lk.isNotEmpty() && it.okey == lk } ?: ch.getOrElse(prefs.getInt("last", 0)) { ch[0] }
+        // приложение свёрнуто — не запускаем звук в фоне, onStart сам включит выбранный канал
+        if (started) playChan(first) else { cur = first; arch = null }
+        renderGroupsCard()
+        refreshRail()
+        if (reopenSetup) { reopenSetup = false; openSetup() }
+    }
+
+    /** Возврат к уже загруженным данным после recreate() (смена темы): без запросов к серверу и без разбора программы. */
+    private fun restoreSession() {
+        epg = Session.epg
+        plEpgUrl = Session.plEpgUrl
+        epgStatus = Session.epgStatus
+        applyChannels(Session.chans, "")
+        if (epg.isEmpty()) {
+            // программа к моменту смены темы ещё не успела загрузиться — берём её из кэша (быстро, без скачивания)
+            epgStatus = "загрузка…"
+            val cs = chans; val g = loadGen; val tz = tzMin(); val pe = plEpgUrl
+            Thread { loadEpgNow(cs, pe, false, tz, g) }.start()
+        }
+    }
+
     private fun loadAll(force: Boolean = false) {
         val gen = ++loadGen   // результаты более ранних загрузок будут отброшены
         val pl = prefs.getString("pl", "") ?: ""
         val tz = tzMin()
-        epg = emptyMap(); epgStatus = "загрузка…"
+        epg = emptyMap(); Session.epg = emptyMap(); epgStatus = "загрузка…"
         toast("Загрузка плейлиста…")
         Thread {
             try {
@@ -1446,23 +1678,8 @@ class MainActivity : Activity() {
                 if (gen != loadGen) return@Thread
                 runOnUiThread {
                     if (gen != loadGen || isFinishing || isDestroyed) return@runOnUiThread
-                    chans = list.ch
-                    groups = list.ch.map { it.group }.distinct()
-                    val sm = prefs.getString("start", "fav")
-                    val lg = prefs.getString("lgrp", G_ALL) ?: G_ALL
-                    val startFav = sm == "fav" && list.ch.any { isFav(it) }
-                    grp = when {
-                        startFav -> G_FAV
-                        sm == "last" && (lg == G_FAV || lg == G_HIST || (lg in groups && lg !in hiddenGroups)) -> lg
-                        else -> G_ALL
-                    }
-                    zap = if (startFav) ordered().filter { isFav(it) } else emptyList()
-                    toast(if (fromCache) "Сервер недоступен — показан сохранённый список: ${list.ch.size}" else "Каналов: ${list.ch.size}")
-                    val lk = prefs.getString("lastk", "") ?: ""
-                    val first = list.ch.firstOrNull { lk.isNotEmpty() && it.okey == lk } ?: list.ch.getOrElse(prefs.getInt("last", 0)) { list.ch[0] }
-                    // приложение свёрнуто — не запускаем звук в фоне, onStart сам включит выбранный канал
-                    if (started) playChan(first) else { cur = first; arch = null }
-                    if (reopenSetup) { reopenSetup = false; openSetup() }
+                    applyChannels(list.ch, if (fromCache) "Сервер недоступен — показан сохранённый список: ${list.ch.size}" else "Каналов: ${list.ch.size}")
+                    Session.chans = chans; Session.groups = groups; Session.pl = pl; Session.plEpgUrl = list.epgUrl
                 }
                 if (gen != loadGen) return@Thread
                 plEpgUrl = list.epgUrl
@@ -1485,6 +1702,7 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     if (gen != loadGen) return@runOnUiThread
                     epg = map
+                    Session.epg = map
                     epgStatus = "передач $total, каналов с программой $matched из ${chs.size}"
                     toast("Программа: $epgStatus")
                     if (chPanel.visibility == View.VISIBLE && !moving) { val sp = chList.selectedItemPosition; renderChans(); chList.setSelection(sp.coerceAtLeast(0)) }
@@ -1532,9 +1750,13 @@ class MainActivity : Activity() {
             if (k == KeyEvent.KEYCODE_BACK) {
                 if (setup.visibility == View.VISIBLE && chans.isEmpty()) return super.dispatchKeyEvent(e)
                 if (e.action == KeyEvent.ACTION_UP) {
-                    if (srvPanel.visibility == View.VISIBLE) { if (srvBackToSetup) openSetup() else openChans() }
-                    else if (gmPanel.visibility == View.VISIBLE) openChans()
-                    else closePanels()
+                    when {
+                        srvPanel.visibility == View.VISIBLE -> if (srvBackToSetup) openSetup() else openChans()
+                        setup.visibility == View.VISIBLE -> closeSetup()
+                        // первый «Назад» сворачивает список групп, второй закрывает панель
+                        chPanel.visibility == View.VISIBLE && groupsOpen -> { setGroupsOpen(false); chList.requestFocus() }
+                        else -> closePanels()
+                    }
                 }
                 return true
             }

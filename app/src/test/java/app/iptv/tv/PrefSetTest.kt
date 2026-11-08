@@ -17,6 +17,16 @@ class PrefSetTest {
         assertEquals(listOf(setOf("a", "b"), setOf("b")), saved)
     }
 
+    @Test fun clear_empties_and_saves() {
+        val saved = ArrayList<Set<String>>()
+        val s = PrefSet(setOf("a", "b")) { saved.add(it) }
+        s.clear()
+        assertFalse("a" in s)
+        assertFalse("b" in s)
+        assertEquals(listOf(emptySet<String>()), saved)
+        assertTrue(s.toggle("c"))   // после очистки набор работает как обычно
+    }
+
     @Test fun favorites_keep_same_named_channels_apart() {
         val p = Iptv.parseM3u("#EXTM3U\n#EXTINF:-1 group-title=\"A\",Кино\nhttp://h/1\n#EXTINF:-1 group-title=\"B\",Кино\nhttp://h/2\n")
         val favs = PrefSet(setOf("Кино")) { }   // старое избранное хранилось по названию
