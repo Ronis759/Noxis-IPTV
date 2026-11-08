@@ -172,6 +172,7 @@ class MainActivity : Activity() {
     private var arcIdx = 0
     private var guide: Channel? = null   // канал, чья телепрограмма открыта в панели архива
     private lateinit var btStart: Button
+    private lateinit var btZap: Button
     private lateinit var btDim: Button
     private lateinit var dimOverlay: View
     private val DIM_MIN = 30
@@ -795,6 +796,9 @@ class MainActivity : Activity() {
         }
         val btSound = small(tvButton("♫ Звук, субтитры, формат")).apply { setOnClickListener { openPlayerOptions() } }
         val btFindCh = small(tvButton("⌕ Поиск канала…")).apply { setOnClickListener { openSearch() } }
+        btZap = small(tvButton("")).apply {
+            setOnClickListener { prefs.edit().putString("zapm", if (zapByList()) "all" else "list").apply(); text = zapLabel() }
+        }
 
         // ----- Список каналов -----
         btSort = small(tvButton("")).apply {
@@ -882,7 +886,7 @@ class MainActivity : Activity() {
             addView(btAdv); addView(advBox)
         }
         section("Обновление") { addView(btReload); addView(btEpg); addView(btUpd); addView(tvUpdStat); addView(tvStat) }
-        section("Воспроизведение") { addView(btType); addView(btSound); addView(btFindCh) }
+        section("Воспроизведение") { addView(btType); addView(btZap); addView(btSound); addView(btFindCh) }
         section("Оформление") {
             addView(btTheme); addView(btFont); addView(btDim)
             addView(dimPreview, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(6) })
@@ -1261,6 +1265,7 @@ class MainActivity : Activity() {
         btType.text = typeLabel()
         btSort.text = "Порядок каналов: ${sortNames[sortMode]}"
         btStart.text = startLabel()
+        btZap.text = zapLabel()
         btDim.text = dimLabel()
         btFont.text = fontLabel()
         btTheme.text = themeLabel()
@@ -1641,18 +1646,27 @@ class MainActivity : Activity() {
         toast(if (startPos > 0) "Архив: продолжаю с ${fmtT(startPos)} · ${p.title}" else "Архив: " + hm(p.s) + " " + p.title)
     }
 
-    /** ↑/↓: листаем по списку, выбранному в панели (группа / избранное); пока не выбран — по всем нескрытым каналам. */
+    /** Листать ↑/↓ только по списку, выбранному в панели (группа / избранное)? По умолчанию — нет: по всем каналам, как их номера. */
+    private fun zapByList() = prefs.getString("zapm", "all") == "list"
+
+    private fun zapLabel() = "Листать ↑/↓: " + if (zapByList()) "по выбранному списку (группа, избранное)" else "по всем каналам, по порядку номеров"
+
+    /** ↑/↓: строго по порядку, на один канал за нажатие. По умолчанию — по всем нескрытым каналам (номер ±1, как в плашке канала). */
     private fun step(d: Int) {
-        // строго один канал на одно нажатие: лишние события кнопки, пришедшие сразу следом, игнорируем
+        // лишние события кнопки, пришедшие сразу следом за нажатием, игнорируем
         val t = android.os.SystemClock.uptimeMillis()
-        if (t - lastStepAt < 300) return
+        if (t - lastStepAt < 250) return
         lastStepAt = t
-        var l = zap
+        var l = if (zapByList()) zap else emptyList()
         val all = ordered()
-        if (l.isEmpty()) l = all.filter { it.group !in hiddenGroups }
+        if (l.isEmpty()) l = numList()
         if (l.isEmpty()) l = all
         if (l.isEmpty()) return
-        val i = l.indexOfFirst { it === cur }
+        var i = l.indexOfFirst { it === cur }
+        if (i < 0) {   // текущего канала нет в этом списке (скрытая группа и т. п.) — листаем по всем каналам от него
+            l = all
+            i = l.indexOfFirst { it === cur }
+        }
         val n = if (i < 0) (if (d > 0) 0 else l.size - 1) else (i + d + l.size) % l.size
         playChan(l[n])
     }
