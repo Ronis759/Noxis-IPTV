@@ -33,9 +33,9 @@ class UpdateFlow(
 
     /** Причина, по которой проверка невозможна, либо «ещё не проверялось». */
     private fun baseStatus(): String = when {
-        a.getString(R.string.github_repo).trim().isEmpty() -> "отключено: не задан репозиторий (github_repo в strings.xml)"
-        !BuildConfig.UPDATES_ENABLED -> "отключено: APK подписан временным ключом (см. README)"
-        else -> "ещё не проверялось"
+        a.getString(R.string.github_repo).trim().isEmpty() -> L.t("отключено: не задан репозиторий (github_repo в strings.xml)")
+        !BuildConfig.UPDATES_ENABLED -> L.t("отключено: APK подписан временным ключом (см. README)")
+        else -> L.t("ещё не проверялось")
     }
 
     private fun now() = System.currentTimeMillis() / 1000
@@ -46,11 +46,11 @@ class UpdateFlow(
         // обновление, найденное раньше: показываем значок сразу, без сети
         status = baseStatus()
         val t0 = prefs.getLong("upd_t", 0)
-        if (BuildConfig.UPDATES_ENABLED && t0 > 0 && status == "ещё не проверялось")
-            status = "установлена последняя сборка (проверено ${SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()).format(Date(t0 * 1000))})"
+        if (BuildConfig.UPDATES_ENABLED && t0 > 0 && status == L.t("ещё не проверялось"))
+            status = L.f("установлена последняя сборка (проверено {0})", SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()).format(Date(t0 * 1000)))
         if (BuildConfig.UPDATES_ENABLED) {
             val i = load()
-            if (i != null && i.code > mine()) { available = i; status = "доступна сборка ${i.code} (установлена ${mine()})" } else if (i != null) forget()
+            if (i != null && i.code > mine()) { available = i; status = L.f("доступна сборка {0} (установлена {1})", i.code, mine()) } else if (i != null) forget()
         }
     }
 
@@ -66,12 +66,12 @@ class UpdateFlow(
      */
     fun check(manual: Boolean) {
         val repo = a.getString(R.string.github_repo).trim()
-        if (repo.isEmpty()) { status = baseStatus(); if (manual) { toast("Не задан репозиторий: впишите github_repo в strings.xml"); onChange() }; return }
+        if (repo.isEmpty()) { status = baseStatus(); if (manual) { toast(L.t("Не задан репозиторий: впишите github_repo в strings.xml")); onChange() }; return }
         // Сборка не подписана постоянным ключом (локальная или CI без Secrets): новую версию поверх неё Android не установит — не предлагаем
         if (!BuildConfig.UPDATES_ENABLED) {
             status = baseStatus()
             if (manual) onChange()
-            if (manual) toast("Эта сборка подписана временным ключом — обновление поверх неё не установится. Подпишите APK своим ключом (см. README)")
+            if (manual) toast(L.t("Эта сборка подписана временным ключом — обновление поверх неё не установится. Подпишите APK своим ключом (см. README)"))
             return
         }
         if (manual) {
@@ -81,8 +81,8 @@ class UpdateFlow(
         if (busy) return
         busy = true
         lastTry = now()
-        status = "проверка…"
-        if (manual) toast("Проверка обновлений…")
+        status = L.t("проверка…")
+        if (manual) toast(L.t("Проверка обновлений…"))
         Thread {
             try {
                 val info = Updater.fetch(repo)
@@ -90,9 +90,9 @@ class UpdateFlow(
                 val m = mine()
                 val newer = info != null && info.code > m
                 status = when {
-                    newer -> "доступна сборка ${info!!.code} (установлена $m)"
-                    info == null -> "в последнем релизе нет APK (проверено ${stamp()})"
-                    else -> "установлена последняя сборка $m (проверено ${stamp()})"
+                    newer -> L.f("доступна сборка {0} (установлена {1})", info!!.code, m)
+                    info == null -> L.f("в последнем релизе нет APK (проверено {0})", stamp())
+                    else -> L.f("установлена последняя сборка {0} (проверено {1})", m, stamp())
                 }
                 if (newer) { save(info!!); available = info } else { forget(); available = null }
                 a.runOnUiThread {
@@ -102,14 +102,14 @@ class UpdateFlow(
                         if (manual) ask(info!!, m)
                         else if (prefs.getLong("upd_seen", 0) != info!!.code) {
                             prefs.edit().putLong("upd_seen", info.code).apply()
-                            toast("Доступно обновление (сборка ${info.code}): значок ⇧ в меню слева")
+                            toast(L.f("Доступно обновление (сборка {0}): значок ⇧ в меню слева", info.code))
                         }
-                    } else if (manual) toast("Установлена последняя версия ($m)")
+                    } else if (manual) toast(L.f("Установлена последняя версия ({0})", m))
                 }
             } catch (e: Exception) {
-                status = "ошибка проверки (${stamp()}): " + Iptv.safeMsg(e)
+                status = L.f("ошибка проверки ({0}): ", stamp()) + Iptv.safeMsg(e)
                 if (alive()) onChange()
-                if (manual) a.runOnUiThread { toast("Не удалось проверить обновления: " + Iptv.safeMsg(e)) }
+                if (manual) a.runOnUiThread { toast(L.t("Не удалось проверить обновления: ") + Iptv.safeMsg(e)) }
             } finally {
                 busy = false
             }
@@ -125,15 +125,15 @@ class UpdateFlow(
 
     private fun ask(info: Updater.Info, mine: Long) {
         android.app.AlertDialog.Builder(a, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("Доступна версия ${info.code}")
-            .setMessage("Установлена: $mine. Скачать и установить обновление?")
-            .setPositiveButton("Обновить") { _, _ -> download(info) }
-            .setNegativeButton("Позже", null)
+            .setTitle(L.f("Доступна версия {0}", info.code))
+            .setMessage(L.f("Установлена: {0}. Скачать и установить обновление?", mine))
+            .setPositiveButton(L.t("Обновить")) { _, _ -> download(info) }
+            .setNegativeButton(L.t("Позже"), null)
             .show()
     }
 
     private fun download(info: Updater.Info) {
-        toast("Загрузка обновления…")
+        toast(L.t("Загрузка обновления…"))
         Thread {
             try {
                 val f = Updater.download(a, info)
@@ -143,7 +143,7 @@ class UpdateFlow(
                     if (err != null) toast(err)
                 }
             } catch (e: Exception) {
-                a.runOnUiThread { toast("Не удалось скачать обновление: " + Iptv.safeMsg(e)) }
+                a.runOnUiThread { toast(L.t("Не удалось скачать обновление: ") + Iptv.safeMsg(e)) }
             }
         }.start()
     }

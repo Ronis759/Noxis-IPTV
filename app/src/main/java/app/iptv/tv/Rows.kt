@@ -76,7 +76,9 @@ class RowAdapter(private val ctx: Context) : BaseAdapter() {
         val tx = box.getChildAt(2) as LinearLayout
         box.gravity = Gravity.CENTER_VERTICAL
         (tx.getChildAt(0) as TextView).apply {
-            text = if (comp) r.short.ifEmpty { r.title.take(1).uppercase() } else r.title
+            // служебные группы («Все», «История») и «Без группы» переводятся; названия каналов и групп плейлиста — как есть
+            val shownTitle = if (r.tag == "all" || r.tag == "hist" || r.title == "Без группы") L.t(r.title) else r.title
+            text = if (comp) r.short.ifEmpty { shownTitle.take(1).uppercase() } else shownTitle
             textSize = if (comp) 24f else 20f * UiScale.f
             gravity = if (comp) Gravity.CENTER_HORIZONTAL else Gravity.START
             setTextColor(if (r.title == active && active.isNotEmpty()) Theme.accent else if (r.dim) Theme.gray else Color.WHITE)

@@ -32,7 +32,7 @@ class Prog(val s: Long, val e: Long, val title: String)
 class Playlist(val ch: List<Channel>, val epgUrl: String)
 class HttpCodeException(val code: Int) : IOException("HTTP $code")
 /** Ответ больше допустимого размера (защита от огромных плейлистов, логотипов и «gzip-бомб»). */
-class TooBigException(limit: Long) : IOException("Ответ слишком большой (лимит ${limit / 1048576} МБ)")
+class TooBigException(limit: Long) : IOException(L.f("Ответ слишком большой (лимит {0} МБ)", limit / 1048576))
 class Epg(val map: Map<String, List<Prog>>, val names: Map<String, String>, val ids: Map<String, String>)
 class Server(val name: String, val pl: String, val epg: String)
 
@@ -73,14 +73,14 @@ object Iptv {
                 if (l == null) break
                 val next = URL(URL(u), l).toString()
                 // https -> http: логин и ключи из ссылки ушли бы в открытом виде
-                if (isDowngrade(u, next)) throw IOException("Редирект с https на http заблокирован: ${redactUrl(u)}")
+                if (isDowngrade(u, next)) throw IOException(L.f("Редирект с https на http заблокирован: {0}", redactUrl(u)))
                 u = next
                 continue
             }
             if (code != 200) { c.disconnect(); throw HttpCodeException(code) }
             return c
         }
-        throw IOException("Не удалось загрузить: ${redactUrl(url)}")
+        throw IOException(L.f("Не удалось загрузить: {0}", redactUrl(url)))
     }
 
     /** Перебирает User-Agent при 401/403/406/429/451 и отдаёт открытое соединение в [block]. */
@@ -154,7 +154,7 @@ object Iptv {
             }
             if (!tmp.renameTo(dest)) {
                 dest.delete()
-                if (!tmp.renameTo(dest)) throw IOException("Не удалось сохранить файл")
+                if (!tmp.renameTo(dest)) throw IOException(L.t("Не удалось сохранить файл"))
             }
         } finally {
             tmp.delete()

@@ -52,7 +52,7 @@ object Updater {
         val j = try {
             JSONObject(Iptv.text(Iptv.http("https://api.github.com/repos/$repo/releases/latest", false, Iptv.MAX_JSON, UA)))
         } catch (e: HttpCodeException) {
-            if (e.code == 404) throw IOException("релизов пока нет") else throw e
+            if (e.code == 404) throw IOException(L.t("релизов пока нет")) else throw e
         }
         val tag = j.optString("tag_name")
         val code = Regex("\\d+").findAll(tag).lastOrNull()?.value?.toLongOrNull() ?: return null
@@ -67,7 +67,7 @@ object Updater {
         }
         val a = apk ?: return null
         val url = a.getString("browser_download_url")
-        if (!url.startsWith("https://", true)) throw IOException("ссылка на APK не https")
+        if (!url.startsWith("https://", true)) throw IOException(L.t("ссылка на APK не https"))
         val name = a.optString("name")
         var sha = Integrity.parseDigest(a.optString("digest"))
         if (sha == null) {
@@ -75,7 +75,7 @@ object Updater {
             if (sumUrl != null && sumUrl.startsWith("https://", true))
                 sha = Integrity.parseSumFile(Iptv.text(Iptv.http(sumUrl, false, MAX_SUM, UA)))
         }
-        if (sha == null) throw IOException("в релизе нет контрольной суммы SHA-256 — установка отменена")
+        if (sha == null) throw IOException(L.t("в релизе нет контрольной суммы SHA-256 — установка отменена"))
         return Info(code, tag, url, a.optLong("size"), sha)
     }
 
@@ -88,8 +88,8 @@ object Updater {
         if (f.exists() && (info.size <= 0 || f.length() == info.size) && Integrity.sha256(f) == info.sha256) return f
         f.delete()
         Iptv.download(info.url, f, UA, MAX_APK)
-        if (info.size > 0 && f.length() != info.size) { f.delete(); throw IOException("файл загружен не полностью") }
-        if (Integrity.sha256(f) != info.sha256) { f.delete(); throw IOException("контрольная сумма не совпала — файл удалён") }
+        if (info.size > 0 && f.length() != info.size) { f.delete(); throw IOException(L.t("файл загружен не полностью")) }
+        if (Integrity.sha256(f) != info.sha256) { f.delete(); throw IOException(L.t("контрольная сумма не совпала — файл удалён")) }
         return f
     }
 
@@ -98,9 +98,9 @@ object Updater {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !a.packageManager.canRequestPackageInstalls()) {
             return try {
                 a.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + a.packageName)))
-                "Разрешите установку из этого приложения и снова нажмите «Проверить обновления»"
+                L.t("Разрешите установку из этого приложения и снова нажмите «Проверить обновления»")
             } catch (e: Exception) {
-                "Разрешите установку из неизвестных источников для этого приложения в настройках ТВ"
+                L.t("Разрешите установку из неизвестных источников для этого приложения в настройках ТВ")
             }
         }
         return try {
@@ -110,7 +110,7 @@ object Updater {
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
             null
         } catch (e: Exception) {
-            "На устройстве нет установщика приложений. Установите APK вручную"
+            L.t("На устройстве нет установщика приложений. Установите APK вручную")
         }
     }
 }

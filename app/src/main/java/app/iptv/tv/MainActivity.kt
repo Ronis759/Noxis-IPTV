@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.net.Uri
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
@@ -129,6 +130,7 @@ class MainActivity : Activity() {
     private val numBuf = StringBuilder()
     private var reopenSetup = false                            // после смены цветовой схемы вернуться в настройки
     private lateinit var btTheme: Button
+    private lateinit var btLang: Button
     private var query = ""                                     // текст поиска каналов
     private val history = ArrayList<String>()                  // история просмотра: Channel.okey, свежие первыми
     private val resume = LinkedHashMap<String, Long>()         // позиции в архиве: «okey@начало» -> мс
@@ -190,7 +192,7 @@ class MainActivity : Activity() {
     private val maxRetries = 5
     private val retryRun = Runnable { if (lastUrl.isNotEmpty()) playUrl(lastUrl, retryHls) }
     private val stallRun = Runnable {
-        if (player.playWhenReady && player.playbackState == Player.STATE_BUFFERING && !scheduleRetry()) toast("Поток не отвечает")
+        if (player.playWhenReady && player.playbackState == Player.STATE_BUFFERING && !scheduleRetry()) toast(L.t("Поток не отвечает"))
     }
     private val hideSeek = Runnable { seekBox.visibility = View.GONE; ui.removeCallbacks(seekTick) }
     private val seekTick: Runnable = object : Runnable {
@@ -205,6 +207,25 @@ class MainActivity : Activity() {
     private fun hm(t: Long) = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(t * 1000))
     private fun ad(l: ListView) = l.adapter as RowAdapter
     private fun nowProg(c: Channel): Prog? { val n = now(); return epg[c.eid]?.firstOrNull { it.s <= n && n < it.e } }
+
+    /** Язык интерфейса: настройка «Автоматически / Русский / English»; «Автоматически» — по языку системы. */
+    override fun attachBaseContext(base: Context) {
+        val pref = base.getSharedPreferences("cfg", MODE_PRIVATE).getString("lang", "auto")
+        val en = L.resolveEn(pref, systemLang())
+        L.en = en
+        val loc = Locale(if (en) "en" else "ru")
+        Locale.setDefault(loc)   // названия дней и языков звука — на языке интерфейса
+        val cfg = Configuration(base.resources.configuration)
+        cfg.setLocale(loc)
+        super.attachBaseContext(base.createConfigurationContext(cfg))
+    }
+
+    /** Язык системы (не язык приложения: [Locale.setDefault] его меняет). */
+    @Suppress("DEPRECATION")
+    private fun systemLang(): String {
+        val c = android.content.res.Resources.getSystem().configuration
+        return (if (android.os.Build.VERSION.SDK_INT >= 24) c.locales[0] else c.locale).language
+    }
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
@@ -266,12 +287,12 @@ class MainActivity : Activity() {
                 if (arch != null && !netErr && arcIdx + 1 < arcCands.size) {
                     arcIdx++
                     ui.removeCallbacks(retryRun); retries = 0; readyMode = null
-                    toast("Архив: пробую другой формат ($arcIdx из ${arcCands.size - 1})…")
+                    toast(L.f("Архив: пробую другой формат ({0} из {1})…", arcIdx, arcCands.size - 1))
                     playUrl(arcCands[arcIdx].second)
                     return
                 }
                 if ((arch == null || netErr) && scheduleRetry()) return
-                toast(if (arch != null) "Архив не воспроизводится (тип: ${archType()}) — смените тип в настройках. " + error.errorCodeName else "Ошибка воспроизведения: " + error.errorCodeName)
+                toast(if (arch != null) L.f("Архив не воспроизводится (тип: {0}) — смените тип в настройках. ", archType()) + error.errorCodeName else L.t("Ошибка воспроизведения: ") + error.errorCodeName)
             }
         })
         pv = PlayerView(this)
@@ -483,10 +504,10 @@ class MainActivity : Activity() {
     private fun buildPanels() {
         grpList = lv(); chList = lv(); dayList = lv(); progList = lv()
         (chList.adapter as RowAdapter).icons = true
-        chTitle = TextView(this).apply { textSize = 20f; maxLines = 2; text = "Каналы   ·   программа: $epgStatus" }
+        chTitle = TextView(this).apply { textSize = 20f; maxLines = 2; text = L.f("Каналы   ·   программа: {0}", L.t(epgStatus)) }
         buildChPanel()
         // шапка архива: «Архив:» · значок канала · название канала, ниже — тип архива и число дней
-        arPrefix = TextView(this).apply { text = "Архив:"; textSize = 24f; setTextColor(Theme.gray) }
+        arPrefix = TextView(this).apply { text = L.t("Архив:"); textSize = 24f; setTextColor(Theme.gray) }
         arLogo = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER; visibility = View.GONE }
         arTitle = TextView(this).apply {
             textSize = 24f; setTextColor(Color.WHITE); maxLines = 1; ellipsize = TextUtils.TruncateAt.END
@@ -512,7 +533,7 @@ class MainActivity : Activity() {
             val r = ad(grpList).row(pos)
             if (r.tag == "g") {
                 toggleGroup(r.title)
-                toast("Группа скрыта: ${r.title}. Вернуть: Настройки → Группы каналов")
+                toast(L.f("Группа скрыта: {0}. Вернуть: Настройки → Группы каналов", groupName(r.title)))
                 onGroupsChanged()
                 grpList.setSelection(minOf(pos, ad(grpList).getCount() - 1))
             }
@@ -527,7 +548,7 @@ class MainActivity : Activity() {
                 val c = shown[pos]
                 android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
                     .setTitle(c.name)
-                    .setItems(arrayOf(if (isFav(c)) "★ Убрать из избранного" else "★ В избранное", "⇅ Переместить (↑/↓)", "↺ Архив канала")) { _, w ->
+                    .setItems(arrayOf(if (isFav(c)) L.t("★ Убрать из избранного") else L.t("★ В избранное"), L.t("⇅ Переместить (↑/↓)"), L.t("↺ Архив канала"))) { _, w ->
                         if (w == 0) favAt(pos) else if (w == 1) startMove(pos) else { setZap(); playChan(c); closePanels(); openArch() }
                     }.show()
             }
@@ -544,7 +565,7 @@ class MainActivity : Activity() {
             if (p != null && c != null) {
                 val n = now()
                 when {
-                    p.s > n -> toast("Эта передача ещё не вышла")
+                    p.s > n -> toast(L.t("Эта передача ещё не вышла"))
                     p.s <= n && n < p.e -> { playChan(c); closePanels() }
                     else -> { if (cur !== c) cur = c; playArch(p); closePanels() }
                 }
@@ -583,11 +604,11 @@ class MainActivity : Activity() {
     /** Левая панель: тонкая полоса значков и справа — группы (свёрнуты) и список каналов. */
     private fun buildChPanel() {
         val w = resources.displayMetrics.widthPixels
-        railUpd = railBtn("⇧", "Обновление") { updates.promptInstall() }
-        railSet = railBtn("⚙", "Настройки") { openSetup() }
-        railArc = railBtn("↺", "Архив") { if (cur != null) openArch() else toast("Сначала выберите канал") }
-        railFav = railBtn("★", "Избранное") { selectGroup(G_FAV) }
-        railGrp = railBtn("☰", "Группы каналов") { toggleGroupsOpen() }
+        railUpd = railBtn("⇧", L.t("Обновление")) { updates.promptInstall() }
+        railSet = railBtn("⚙", L.t("Настройки")) { openSetup() }
+        railArc = railBtn("↺", L.t("Архив")) { if (cur != null) openArch() else toast(L.t("Сначала выберите канал")) }
+        railFav = railBtn("★", L.t("Избранное")) { selectGroup(G_FAV) }
+        railGrp = railBtn("☰", L.t("Группы каналов")) { toggleGroupsOpen() }
         rail = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
@@ -634,10 +655,13 @@ class MainActivity : Activity() {
     private fun setRailHint(t: String?) { railHintText = t; refreshTitle() }
 
     /** Заголовок списка каналов: название группы и состояние программы; у выбранного значка полосы — его название. */
+    /** Название группы для показа: служебные группы и «Без группы» переводятся, группы из плейлиста остаются как есть. */
+    private fun groupName(g: String) = if (g == G_ALL || g == G_FAV || g == G_HIST || g == G_FIND || g == "Без группы") L.t(g) else g
+
     private fun refreshTitle() {
         if (!::chTitle.isInitialized) return
-        val head = when (grp) { G_ALL -> "Все каналы"; G_FIND -> "Поиск «$query»"; else -> grp }
-        chTitle.text = railHintText ?: "$head   ·   программа: $epgStatus"
+        val head = when (grp) { G_ALL -> L.t("Все каналы"); G_FIND -> L.f("Поиск «{0}»", query); else -> groupName(grp) }
+        chTitle.text = railHintText ?: L.f("{0}   ·   программа: {1}", head, L.t(epgStatus))
     }
 
     /** Обновляет вид значков: значок «Обновление» виден только при найденной новой версии, у выбранного режима — рамка. */
@@ -696,9 +720,9 @@ class MainActivity : Activity() {
         refreshRail()
         if (shown.isEmpty()) {
             toast(when (g) {
-                G_FAV -> "Избранное пусто. Удерживайте OK на канале"
-                G_HIST -> "История пуста"
-                else -> "В группе нет каналов"
+                G_FAV -> L.t("Избранное пусто. Удерживайте OK на канале")
+                G_HIST -> L.t("История пуста")
+                else -> L.t("В группе нет каналов")
             })
             (if (g == G_FAV) railFav else railGrp).requestFocus()
         } else chList.requestFocus()
@@ -715,7 +739,7 @@ class MainActivity : Activity() {
     /** Цвет подложки панелей: тёмно-серый с непрозрачностью [panelDim] %. */
     private fun panelColor(): Int = (((panelDim * 255 + 50) / 100) shl 24) or Theme.panel
 
-    private fun dimLabel() = "Затемнение подложки списков: $panelDim%  (◄ ► ±5)"
+    private fun dimLabel() = L.f("Затемнение подложки списков: {0}%  (◄ ► ±5)", panelDim)
 
     /** Меняет затемнение сразу для всех панелей и сохраняет значение. */
     private fun setDim(v: Int) {
@@ -786,27 +810,27 @@ class MainActivity : Activity() {
         fun gap() = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) }
 
         etPl = field("http://…/playlist.m3u")
-        etEpg = field("пусто = адрес из плейлиста (url-tvg)")
-        etTz = field("0, 3, 5.5 или 5:30").apply { inputType = InputType.TYPE_CLASS_TEXT }
-        etUa = field("пусто = автоподбор (VLC, okhttp, Mozilla…)")
+        etEpg = field(L.t("пусто = адрес из плейлиста (url-tvg)"))
+        etTz = field(L.t("0, 3, 5.5 или 5:30")).apply { inputType = InputType.TYPE_CLASS_TEXT }
+        etUa = field(L.t("пусто = автоподбор (VLC, okhttp, Mozilla…)"))
 
         // ----- Источник -----
         tvSrv = TextView(this).apply {
             textSize = 18f; setTextColor(Color.WHITE); setPadding(dp(2), 0, 0, dp(2))
             maxLines = 1; ellipsize = TextUtils.TruncateAt.END
         }
-        btServer = small(tvButton("⇄ Выбрать сервер")).apply { setOnClickListener { openServers() } }
-        val btFile = small(tvButton("Загрузить файл…")).apply { setOnClickListener { pickFile() } }
-        val btReload = small(tvButton("Обновить плейлист")).apply {
+        btServer = small(tvButton(L.t("⇄ Выбрать сервер"))).apply { setOnClickListener { openServers() } }
+        val btFile = small(tvButton(L.t("Загрузить файл…"))).apply { setOnClickListener { pickFile() } }
+        val btReload = small(tvButton(L.t("Обновить плейлист"))).apply {
             setOnClickListener { if (applySource(true) == 2) closePanels() }
         }
         // «Применить» перезагружает только то, что изменилось: ссылка плейлиста — плейлист; программа или часовой пояс — только программу
-        val btApply = small(tvButton("Применить")).apply {
+        val btApply = small(tvButton(L.t("Применить"))).apply {
             gravity = Gravity.CENTER
             setOnClickListener {
                 when (applySource()) {
                     2 -> closePanels()
-                    0 -> toast("Изменений нет")
+                    0 -> toast(L.t("Изменений нет"))
                     else -> {}
                 }
             }
@@ -814,10 +838,10 @@ class MainActivity : Activity() {
         advBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
-            addView(label("Ссылка на плейлист (M3U)")); addView(etPl)
-            addView(label("Программа передач (XMLTV)")); addView(etEpg)
-            addView(label("User-Agent (если сервер отвечает 403)")); addView(etUa)
-            addView(label("Часовой пояс программы, ч от UTC (если не указан в EPG)")); addView(etTz)
+            addView(label(L.t("Ссылка на плейлист (M3U)"))); addView(etPl)
+            addView(label(L.t("Программа передач (XMLTV)"))); addView(etEpg)
+            addView(label(L.t("User-Agent (если сервер отвечает 403)"))); addView(etUa)
+            addView(label(L.t("Часовой пояс программы, ч от UTC (если не указан в EPG)"))); addView(etTz)
             addView(btApply)
         }
         btAdv = small(tvButton("")).apply { setOnClickListener { setAdvanced(advBox.visibility != View.VISIBLE) } }
@@ -826,8 +850,8 @@ class MainActivity : Activity() {
         btType = small(tvButton("")).apply {
             setOnClickListener { ctype = types[(types.indexOf(ctype) + 1) % types.size]; prefs.edit().putString("ct", ctype).apply(); text = typeLabel() }
         }
-        val btSound = small(tvButton("♫ Звук, субтитры, формат")).apply { setOnClickListener { openPlayerOptions() } }
-        val btFindCh = small(tvButton("⌕ Поиск канала…")).apply { setOnClickListener { openSearch() } }
+        val btSound = small(tvButton(L.t("♫ Звук, субтитры, формат"))).apply { setOnClickListener { openPlayerOptions() } }
+        val btFindCh = small(tvButton(L.t("⌕ Поиск канала…"))).apply { setOnClickListener { openSearch() } }
         btZap = small(tvButton("")).apply {
             setOnClickListener { prefs.edit().putString("zapm", if (zapByList()) "all" else "list").apply(); text = zapLabel() }
         }
@@ -847,6 +871,7 @@ class MainActivity : Activity() {
 
         // ----- Оформление: всё применяется сразу, перезагрузки нет -----
         btTheme = small(tvButton("")).apply { setOnClickListener { chooseTheme() } }
+        btLang = small(tvButton("")).apply { setOnClickListener { chooseLang() } }
         // размер шрифта: OK — следующее значение (шаг 10), ◄/► — ±10
         btFont = small(tvButton("")).apply {
             setOnClickListener { setFont(if (fontPct + 10 > 160) 70 else fontPct + 10) }
@@ -875,7 +900,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(12), 0, dp(12), 0)
             setBackgroundColor(panelColor())
-            addView(TextView(this@MainActivity).apply { text = "Канал · передача"; textSize = 15f; setTextColor(Color.WHITE) })
+            addView(TextView(this@MainActivity).apply { text = L.t("Канал · передача"); textSize = 15f; setTextColor(Color.WHITE) })
         }
         val dimPreview = FrameLayout(this).apply {
             background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xFF2E86AB.toInt(), 0xFFF6C85F.toInt(), 0xFFE4572E.toInt()))
@@ -884,11 +909,11 @@ class MainActivity : Activity() {
 
         // ----- Обновление и система -----
         tvStat = TextView(this).apply { textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(10), 0, 0) }
-        val btEpg = small(tvButton("Обновить программу передач")).apply {
+        val btEpg = small(tvButton(L.t("Обновить программу передач"))).apply {
             setOnClickListener {
-                if (chans.isEmpty()) { toast("Сначала загрузите плейлист") } else {
-                    toast("Загрузка программы передач…")
-                    epgStatus = "загрузка…"
+                if (chans.isEmpty()) { toast(L.t("Сначала загрузите плейлист")) } else {
+                    toast(L.t("Загрузка программы передач…"))
+                    epgStatus = L.t("загрузка…")
                     val tzv = Tz.parse(etTz.text.toString())
                     prefs.edit().putString("epg", etEpg.text.toString().trim()).putInt("tzm", tzv).apply()
                     val cs = chans; val g = loadGen
@@ -896,14 +921,14 @@ class MainActivity : Activity() {
                 }
             }
         }
-        btUpd = small(tvButton("Проверить обновления")).apply { setOnClickListener { updates.check(true) } }
+        btUpd = small(tvButton(L.t("Проверить обновления"))).apply { setOnClickListener { updates.check(true) } }
         tvUpdStat = TextView(this).apply { textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(8), 0, 0) }
-        val btAbout = small(tvButton("О программе")).apply { setOnClickListener { showAbout() } }
+        val btAbout = small(tvButton(L.t("О программе"))).apply { setOnClickListener { showAbout() } }
 
         // ----- Группы каналов: нажатие — показать / скрыть -----
         groupsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         tvGroupsInfo = TextView(this).apply { textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(8), 0, dp(2)) }
-        btShowAllGroups = small(tvButton("Показать все группы")).apply {
+        btShowAllGroups = small(tvButton(L.t("Показать все группы"))).apply {
             gravity = Gravity.CENTER
             setOnClickListener {
                 hiddenGroups.clear()
@@ -912,23 +937,23 @@ class MainActivity : Activity() {
             }
         }
         // ----- Раскрывающиеся вкладки (порядок на экране) -----
-        section("Источник") {
-            addView(label("Текущий сервер")); addView(tvSrv)
+        section(L.t("Источник")) {
+            addView(label(L.t("Текущий сервер"))); addView(tvSrv)
             addView(row(btServer, btFile))
             addView(btAdv); addView(advBox)
         }
-        section("Обновление") { addView(btReload); addView(btEpg); addView(btUpd); addView(tvUpdStat); addView(tvStat) }
-        section("Воспроизведение") { addView(btType); addView(btZap); addView(btSound); addView(btFindCh) }
-        section("Оформление") {
-            addView(btTheme); addView(btFont); addView(btDim)
+        section(L.t("Обновление")) { addView(btReload); addView(btEpg); addView(btUpd); addView(tvUpdStat); addView(tvStat) }
+        section(L.t("Воспроизведение")) { addView(btType); addView(btZap); addView(btSound); addView(btFindCh) }
+        section(L.t("Оформление")) {
+            addView(btLang); addView(btTheme); addView(btFont); addView(btDim)
             addView(dimPreview, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(6) })
         }
-        section("Список каналов") { addView(btSort); addView(btStart) }
-        section("Группы каналов") { addView(tvGroupsInfo); addView(btShowAllGroups); addView(groupsBox) }
+        section(L.t("Список каналов")) { addView(btSort); addView(btStart) }
+        section(L.t("Группы каналов")) { addView(tvGroupsInfo); addView(btShowAllGroups); addView(groupsBox) }
         // ----- Кнопки пульта: OK / ► — следующее действие, ◄ — предыдущее -----
         val keyInfo = TextView(this).apply {
-            text = "Назначение кнопок при просмотре эфира. OK или ► — следующее действие, ◄ — предыдущее. " +
-                "Стрелки джойстика переназначаются только при просмотре эфира. OK, «Назад» и цифры не меняются; в списках и меню кнопки работают как раньше."
+            text = L.t("Назначение кнопок при просмотре эфира. OK или ► — следующее действие, ◄ — предыдущее. ") +
+                L.t("Стрелки джойстика переназначаются только при просмотре эфира. OK, «Назад» и цифры не меняются; в списках и меню кнопки работают как раньше.")
             textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(4), 0, dp(4))
         }
         for (kb in KeyMap.buttons) {
@@ -944,45 +969,45 @@ class MainActivity : Activity() {
             }
             keyBtns.add(b)
         }
-        val btKeyReset = small(tvButton("Сбросить на стандартные")).apply {
+        val btKeyReset = small(tvButton(L.t("Сбросить на стандартные"))).apply {
             gravity = Gravity.CENTER
             setOnClickListener {
                 val ed = prefs.edit()
                 for (kb in KeyMap.buttons) ed.remove(KeyMap.PREF + kb.code)
                 ed.apply()
                 refreshKeyButtons()
-                toast("Кнопки пульта сброшены")
+                toast(L.t("Кнопки пульта сброшены"))
             }
         }
-        section("Кнопки пульта") {
+        section(L.t("Кнопки пульта")) {
             addView(keyInfo)
             for (b in keyBtns) addView(b)
             addView(btKeyReset)
         }
         // ----- Резервная копия: настройки в файл и обратно -----
-        val btBackup = small(tvButton("⤓ Сохранить настройки в файл")).apply { setOnClickListener { exportSettings() } }
-        val btBackupAs = small(tvButton("⤓ Сохранить как…")).apply { setOnClickListener { exportSettingsAs() } }
-        val btRestore = small(tvButton("⤒ Восстановить настройки из файла…")).apply { setOnClickListener { importSettings() } }
+        val btBackup = small(tvButton(L.t("⤓ Сохранить настройки в файл"))).apply { setOnClickListener { exportSettings() } }
+        val btBackupAs = small(tvButton(L.t("⤓ Сохранить как…"))).apply { setOnClickListener { exportSettingsAs() } }
+        val btRestore = small(tvButton(L.t("⤒ Восстановить настройки из файла…"))).apply { setOnClickListener { importSettings() } }
         val tvBackupInfo = TextView(this).apply {
-            text = "В файл попадают применённые настройки: сервер и ссылки, оформление, порядок каналов, избранное, скрытые группы, " +
-                "кнопки пульта, история. Плейлист из файла и servers.txt не входят. В ссылках бывают логины и ключи — не публикуйте файл."
+            text = L.t("В файл попадают применённые настройки: сервер и ссылки, оформление, порядок каналов, избранное, скрытые группы, ") +
+                L.t("кнопки пульта, история. Плейлист из файла и servers.txt не входят. В ссылках бывают логины и ключи — не публикуйте файл.")
             textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(8), 0, dp(2))
         }
-        val btRestoreUrl = small(tvButton("⤒ Восстановить по ссылке…")).apply { setOnClickListener { importSettingsFromUrl() } }
-        section("Резервная копия") { addView(btBackup); addView(btBackupAs); addView(btRestore); addView(btRestoreUrl); addView(tvBackupInfo) }
-        section("Система") { addView(btAbout) }
+        val btRestoreUrl = small(tvButton(L.t("⤒ Восстановить по ссылке…"))).apply { setOnClickListener { importSettingsFromUrl() } }
+        section(L.t("Резервная копия")) { addView(btBackup); addView(btBackupAs); addView(btRestore); addView(btRestoreUrl); addView(tvBackupInfo) }
+        section(L.t("Система")) { addView(btAbout) }
 
-        val btClose = tvButton("Закрыть").apply { gravity = Gravity.CENTER; setOnClickListener { closeSetup() } }
+        val btClose = tvButton(L.t("Закрыть")).apply { gravity = Gravity.CENTER; setOnClickListener { closeSetup() } }
 
         val ver = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (e: Exception) { "?" }
         val build = try { Updater.installedCode(this) } catch (e: Exception) { 0L }
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(TextView(this@MainActivity).apply { text = "Настройки"; textSize = 24f; setTextColor(Color.WHITE) },
+            addView(TextView(this@MainActivity).apply { text = L.t("Настройки"); textSize = 24f; setTextColor(Color.WHITE) },
                 LinearLayout.LayoutParams(0, -2, 1f))
             addView(TextView(this@MainActivity).apply {
-                text = getString(R.string.app_name) + " · v" + ver + " · сборка " + build; textSize = 13f; setTextColor(gray)
+                text = getString(R.string.app_name) + " · v" + ver + L.t(" · сборка ") + build; textSize = 13f; setTextColor(gray)
             })
         }
 
@@ -1000,7 +1025,7 @@ class MainActivity : Activity() {
 
     /** Кнопка-«плитка» группы: ✓ показана, ✗ скрыта. */
     private fun groupChip(name: String, count: Int, hidden: Boolean): Button =
-        tvButton((if (hidden) "✗  " else "✓  ") + name + "  ($count)").apply {
+        tvButton((if (hidden) "✗  " else "✓  ") + groupName(name) + "  ($count)").apply {
             textSize = 15f; minHeight = dp(44); minimumHeight = dp(44)
             setPadding(dp(12), dp(4), dp(12), dp(4))
             maxLines = 1; ellipsize = TextUtils.TruncateAt.END
@@ -1013,8 +1038,8 @@ class MainActivity : Activity() {
         if (!::groupsBox.isInitialized) return
         groupsBox.removeAllViews()
         val hid = groups.count { it in hiddenGroups }
-        tvGroupsInfo.text = if (groups.isEmpty()) "Групп пока нет — загрузите плейлист"
-        else "Всего: ${groups.size} · скрыто: $hid · OK — показать или скрыть группу"
+        tvGroupsInfo.text = if (groups.isEmpty()) L.t("Групп пока нет — загрузите плейлист")
+        else L.f("Всего: {0} · скрыто: {1} · OK — показать или скрыть группу", groups.size, hid)
         btShowAllGroups.visibility = if (hid > 0) View.VISIBLE else View.GONE
         val counts = chans.groupingBy { it.group }.eachCount()
         val perRow = 3
@@ -1056,7 +1081,7 @@ class MainActivity : Activity() {
     /** «ещё 14 мин» / «ещё 1 ч 05 мин» */
     private fun leftLabel(sec: Long): String {
         val m = ((sec + 59) / 60).coerceAtLeast(1)
-        return if (m >= 60) "ещё ${m / 60} ч ${String.format(Locale.US, "%02d", m % 60)} мин" else "ещё $m мин"
+        return if (m >= 60) L.f("ещё {0} ч {1} мин", m / 60, String.format(Locale.US, "%02d", m % 60)) else L.f("ещё {0} мин", m)
     }
 
     private fun hud() {
@@ -1064,11 +1089,11 @@ class MainActivity : Activity() {
         val a = arch
         val p = a ?: nowProg(c)
         val num = numList().indexOfFirst { it === c }
-        hudT.text = (if (num >= 0) "${num + 1}  " else "") + (if (isFav(c)) "★ " else "") + c.name + if (a != null) "  ·  архив" else ""
+        hudT.text = (if (num >= 0) "${num + 1}  " else "") + (if (isFav(c)) "★ " else "") + c.name + if (a != null) L.t("  ·  архив") else ""
         Logos.load(hudLogo, c.logo, true)
         hudP.text = if (p != null) "${hm(p.s)}–${hm(p.e)}  ${p.title}" else ""
         val nx = if (p != null) epg[c.eid]?.firstOrNull { it.s >= p.e } else null
-        hudN.text = if (nx != null) "Далее: ${hm(nx.s)}–${hm(nx.e)}  ${nx.title}" else ""
+        hudN.text = if (nx != null) L.f("Далее: {0}–{1}  {2}", hm(nx.s), hm(nx.e), nx.title) else ""
         hudN.visibility = if (nx != null) View.VISIBLE else View.GONE
         // полоса прогресса и «ещё N мин» — только для прямого эфира с известной передачей
         val t = now()
@@ -1115,13 +1140,13 @@ class MainActivity : Activity() {
         sortMode = m
         if (m == "custom" && customOrder.isEmpty()) { customOrder = chans.map { it.okey }.toMutableList(); saveOrder() }
         prefs.edit().putString("sort", m).apply()
-        btSort.text = "Порядок каналов: ${sortNames[m]}"
+        btSort.text = L.f("Порядок каналов: {0}", L.t(sortNames[m].orEmpty()))
     }
 
-    private fun startLabel() = "При запуске открывать: " + when (prefs.getString("start", "fav")) {
-        "all" -> "Все каналы"
-        "last" -> "последнюю группу"
-        else -> "★ Избранное"
+    private fun startLabel() = L.t("При запуске открывать: ") + when (prefs.getString("start", "fav")) {
+        "all" -> L.t("Все каналы")
+        "last" -> L.t("последнюю группу")
+        else -> L.t("★ Избранное")
     }
 
     private fun saveOrder() = prefs.edit().putString("order", customOrder.joinToString("\n")).apply()
@@ -1138,7 +1163,7 @@ class MainActivity : Activity() {
         }
         moving = true
         renderChans(); chList.setSelection(pos)
-        toast("Перемещение: ↑/↓ — двигать, OK — готово")
+        toast(L.t("Перемещение: ↑/↓ — двигать, OK — готово"))
     }
 
     private fun moveBy(d: Int) {
@@ -1151,7 +1176,7 @@ class MainActivity : Activity() {
         renderChans(); chList.setSelection(t)
     }
 
-    private fun stopMove() { moving = false; renderChans(); toast("Порядок сохранён") }
+    private fun stopMove() { moving = false; renderChans(); toast(L.t("Порядок сохранён")) }
 
     private fun renderChans() {
         val all = ordered()
@@ -1177,7 +1202,7 @@ class MainActivity : Activity() {
 
     private fun toggleFav(c: Channel) {
         favs.toggle(c.okey)
-        toast(if (isFav(c)) "★ В избранное: ${c.name}" else "Убрано из избранного: ${c.name}")
+        toast(if (isFav(c)) L.f("★ В избранное: {0}", c.name) else L.f("Убрано из избранного: {0}", c.name))
     }
 
     /** Переключает избранное у канала с номером [pos] в текущем списке и сохраняет позицию в списке. */
@@ -1200,11 +1225,11 @@ class MainActivity : Activity() {
         guide = c
         arTitle.text = c.name
         Logos.load(arLogo, c.logo, true)
-        arInfo.text = "тип: ${archType(c)}, дней: ${if (c.days > 0) c.days else 7}" + (if (c.days == 0 && c.ctype.isEmpty() && c.csrc.isEmpty()) ", в плейлисте нет catchup" else "")
+        arInfo.text = L.f("тип: {0}, дней: {1}", archType(c), if (c.days > 0) c.days else 7) + (if (c.days == 0 && c.ctype.isEmpty() && c.csrc.isEmpty()) L.t(", в плейлисте нет catchup") else "")
         val n = minOf(if (c.days > 0) c.days else 7, 14)
         val f = SimpleDateFormat("dd.MM", Locale.getDefault())
         ad(dayList).set((0..n).map { i ->
-            Row(when (i) { 0 -> "Сегодня"; 1 -> "Вчера"; else -> f.format(Date(System.currentTimeMillis() - i * 86400000L)) })
+            Row(when (i) { 0 -> L.t("Сегодня"); 1 -> L.t("Вчера"); else -> f.format(Date(System.currentTimeMillis() - i * 86400000L)) })
         })
         dayOff = 0
         if (keepChannels) { setGroupsOpen(false); hudBox.visibility = View.GONE; seekBox.visibility = View.GONE; arPanel.visibility = View.VISIBLE }
@@ -1222,33 +1247,33 @@ class MainActivity : Activity() {
         cal.add(Calendar.DAY_OF_YEAR, 1)
         val s1 = cal.timeInMillis / 1000
         var l = (epg[c.eid] ?: emptyList()).filter { it.e > s0 && it.s < s1 }
-        if (l.isEmpty()) l = (0 until 24).map { Prog(s0 + it * 3600L, s0 + (it + 1) * 3600L, "Эфир " + hm(s0 + it * 3600L)) }
+        if (l.isEmpty()) l = (0 until 24).map { Prog(s0 + it * 3600L, s0 + (it + 1) * 3600L, L.t("Эфир ") + hm(s0 + it * 3600L)) }
         val n = now()
         val lim = n - (if (c.days > 0) c.days else 7) * 86400L
         ad(progList).set(l.map { p ->
             val fut = p.s > n; val live = p.s <= n && n < p.e; val ok = p.e > lim
-            Row(p.title, hm(p.s) + "–" + hm(p.e) + when { live -> " · в эфире"; fut -> " · ещё не было"; !ok -> " · нет в архиве"; else -> "" }, p, fut || !ok)
+            Row(p.title, hm(p.s) + "–" + hm(p.e) + when { live -> L.t(" · в эфире"); fut -> L.t(" · ещё не было"); !ok -> L.t(" · нет в архиве"); else -> "" }, p, fut || !ok)
         })
         var i = l.indexOfFirst { it.s <= n && n < it.e }
         if (i < 0) i = l.indexOfLast { it.s <= n }
         progList.setSelection(i.coerceAtLeast(0))
     }
 
-    private fun typeLabel() = "Тип архива по умолчанию: $ctype"
+    private fun typeLabel() = L.f("Тип архива по умолчанию: {0}", ctype)
 
     /** Название выбранного сервера для экрана настроек. */
     private fun srvLabel(): String {
         val pl = prefs.getString("pl", "") ?: ""
         return when {
-            pl.isEmpty() -> "не выбран"
-            pl == "local" -> "локальный файл"
+            pl.isEmpty() -> L.t("не выбран")
+            pl == "local" -> L.t("локальный файл")
             else -> (prefs.getString("srvn", "") ?: "").ifEmpty { Iptv.hostOf(pl) }
         }
     }
 
     private fun setAdvanced(on: Boolean) {
         advBox.visibility = if (on) View.VISIBLE else View.GONE
-        btAdv.text = if (on) "Дополнительно  ▴" else "Дополнительно  ▾"
+        btAdv.text = if (on) L.t("Дополнительно  ▴") else L.t("Дополнительно  ▾")
     }
 
     /** Действие, назначенное на кнопку пульта [code]. */
@@ -1258,7 +1283,7 @@ class MainActivity : Activity() {
         prefs.edit().putString(KeyMap.PREF + b.code, a.id).apply()
     }
 
-    private fun keyLabel(b: KeyMap.Btn) = b.name + "  →  " + keyAction(b.code).label
+    private fun keyLabel(b: KeyMap.Btn) = L.t(b.name) + "  →  " + L.t(keyAction(b.code).label)
 
     private fun refreshKeyButtons() {
         for ((i, kb) in KeyMap.buttons.withIndex()) keyBtns.getOrNull(i)?.text = keyLabel(kb)
@@ -1313,13 +1338,14 @@ class MainActivity : Activity() {
         etUa.setText(prefs.getString("ua", ""))
         tvSrv.text = srvLabel()
         btType.text = typeLabel()
-        btSort.text = "Порядок каналов: ${sortNames[sortMode]}"
+        btSort.text = L.f("Порядок каналов: {0}", L.t(sortNames[sortMode].orEmpty()))
         btStart.text = startLabel()
         btZap.text = zapLabel()
         btDim.text = dimLabel()
         btFont.text = fontLabel()
         btTheme.text = themeLabel()
-        tvStat.text = "Программа передач: $epgStatus"
+        btLang.text = langLabel()
+        tvStat.text = L.f("Программа передач: {0}", L.t(epgStatus))
         setAdvanced(pl.isEmpty())   // если плейлиста нет, сразу показываем поля для ручного ввода
         showSection(0, pl.isEmpty())   // нет плейлиста — раскрыт «Источник», иначе все вкладки свёрнуты
         renderGroupsCard()
@@ -1338,14 +1364,35 @@ class MainActivity : Activity() {
             .putInt("tzm", Tz.parse(etTz.text.toString())).putString("ct", ctype).putString("ua", etUa.text.toString().trim()).apply()
     }
 
-    private fun themeLabel() = "Цветовая схема: ${Theme.current.name}"
+    private fun langPref() = prefs.getString("lang", "auto") ?: "auto"
+
+    private fun langLabel() = L.f("Язык: {0}", when (langPref()) {
+        "ru" -> "Русский"
+        "en" -> "English"
+        else -> L.t("Автоматически (язык системы)")
+    })
+
+    /** Выбор языка. Тексты задаются при построении интерфейса, поэтому экран пересоздаётся (как при смене цветовой схемы). */
+    private fun chooseLang() {
+        val codes = listOf("auto", "ru", "en")
+        showChoice(L.t("Язык"), listOf(L.t("Автоматически (язык системы)"), "Русский", "English"), codes.indexOf(langPref()).coerceAtLeast(0)) { w ->
+            if (codes[w] != langPref()) {
+                persistSetup()
+                prefs.edit().putString("lang", codes[w]).putBoolean("reopen", true).apply()
+                Session.keep = true
+                recreate()
+            }
+        }
+    }
+
+    private fun themeLabel() = L.f("Цветовая схема: {0}", L.t(Theme.current.name))
 
     /**
      * Выбор цветовой схемы. Цвета задаются при построении интерфейса, поэтому экран пересоздаётся;
      * плейлист и программа передач при этом остаются в [Session] и заново не загружаются (поток запускается снова).
      */
     private fun chooseTheme() {
-        showChoice("Цветовая схема", Theme.all.map { it.name }, Theme.all.indexOf(Theme.current)) { w ->
+        showChoice(L.t("Цветовая схема"), Theme.all.map { L.t(it.name) }, Theme.all.indexOf(Theme.current)) { w ->
             val t = Theme.all[w]
             if (t !== Theme.current) {
                 persistSetup()
@@ -1380,8 +1427,8 @@ class MainActivity : Activity() {
         }
         if (newPl.isNotEmpty() && (newPl != oldPl || forcePlaylist || chans.isEmpty())) { loadAll(false); return 2 }
         if (chans.isNotEmpty() && (newEpg != oldEpg || newTz != oldTz)) {
-            toast("Загрузка программы передач…")
-            epgStatus = "загрузка…"
+            toast(L.t("Загрузка программы передач…"))
+            epgStatus = L.t("загрузка…")
             val cs = chans; val g = loadGen
             Thread { loadEpgNow(cs, plEpgUrl, false, newTz, g) }.start()
             return 1
@@ -1391,7 +1438,7 @@ class MainActivity : Activity() {
 
     /** Закрывает настройки; изменённые поля источника применяются. */
     private fun closeSetup() {
-        if (chans.isEmpty() && etPl.text.toString().trim().isEmpty()) { toast("Выберите сервер или впишите ссылку на плейлист"); return }
+        if (chans.isEmpty() && etPl.text.toString().trim().isEmpty()) { toast(L.t("Выберите сервер или впишите ссылку на плейлист")); return }
         applySource()
         closePanels()
     }
@@ -1400,12 +1447,12 @@ class MainActivity : Activity() {
     private fun refreshUpdateUi() {
         if (!::btUpd.isInitialized || !::updates.isInitialized) return
         val i = updates.available
-        if (::tvUpdStat.isInitialized) tvUpdStat.text = "Обновление программы: " + updates.status
-        btUpd.text = if (i != null) "⇧ Установить обновление (сборка ${i.code})" else "Проверить обновления"
+        if (::tvUpdStat.isInitialized) tvUpdStat.text = L.t("Обновление программы: ") + updates.status
+        btUpd.text = if (i != null) L.f("⇧ Установить обновление (сборка {0})", i.code) else L.t("Проверить обновления")
     }
 
     /* ---------- размер шрифта ---------- */
-    private fun fontLabel() = "Размер шрифта списков: $fontPct%  (◄ ► ±10)"
+    private fun fontLabel() = L.f("Размер шрифта списков: {0}%  (◄ ► ±10)", fontPct)
 
     private fun setFont(v: Int) {
         fontPct = v.coerceIn(70, 160)
@@ -1421,7 +1468,7 @@ class MainActivity : Activity() {
         paint.textSize = android.util.TypedValue.applyDimension(
             android.util.TypedValue.COMPLEX_UNIT_SP, 20f * UiScale.f, resources.displayMetrics)
         // в ширину строки входят отступы (12 + 12) и левое поле текста (12); +4 — запас, чтобы «Сегодня» не обрезалось
-        dayList.layoutParams = LinearLayout.LayoutParams(paint.measureText("Сегодня").toInt() + dp(40), -1)
+        dayList.layoutParams = LinearLayout.LayoutParams(paint.measureText(L.t("Сегодня")).toInt() + dp(40), -1)
     }
 
     /** Применяет масштаб шрифта к плашкам, сообщениям и всем спискам. */
@@ -1437,9 +1484,9 @@ class MainActivity : Activity() {
 
     /* ---------- пропорции картинки ---------- */
     private val aspectKeys = listOf("fit", "zoom", "fill", "r169", "r43")
-    private val aspectNames = listOf(
-        "По размеру (без искажений)", "Увеличить (края обрезаются)", "Растянуть на весь экран",
-        "16:9 (растянуть по центру)", "4:3 (растянуть по центру)"
+    private val aspectNames get() = listOf(
+        L.t("По размеру (без искажений)"), L.t("Увеличить (края обрезаются)"), L.t("Растянуть на весь экран"),
+        L.t("16:9 (растянуть по центру)"), L.t("4:3 (растянуть по центру)")
     )
 
     private fun applyAspect() {
@@ -1462,29 +1509,29 @@ class MainActivity : Activity() {
         aspect = key
         prefs.edit().putString("aspect", key).apply()
         applyAspect()
-        toast("Картинка: " + aspectNames[aspectKeys.indexOf(key).coerceAtLeast(0)])
+        toast(L.t("Картинка: ") + aspectNames[aspectKeys.indexOf(key).coerceAtLeast(0)])
     }
 
     private fun cycleAspect() = setAspect(aspectKeys[(aspectKeys.indexOf(aspect) + 1) % aspectKeys.size])
 
     private fun showAspect() =
-        showChoice("Пропорции картинки", aspectNames, aspectKeys.indexOf(aspect)) { setAspect(aspectKeys[it]) }
+        showChoice(L.t("Пропорции картинки"), aspectNames, aspectKeys.indexOf(aspect)) { setAspect(aspectKeys[it]) }
 
     /* ---------- звуковые дорожки и субтитры ---------- */
     private fun showChoice(title: String, items: List<String>, checked: Int, pick: (Int) -> Unit) {
         android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
             .setTitle(title)
             .setSingleChoiceItems(items.toTypedArray(), checked) { d, w -> d.dismiss(); pick(w) }
-            .setNegativeButton("Закрыть", null)
+            .setNegativeButton(L.t("Закрыть"), null)
             .show()
     }
 
     private fun openPlayerOptions() {
         val items = listOf(
-            "♫ Звуковая дорожка…", "≡ Субтитры…",
-            "▭ Пропорции: " + aspectNames[aspectKeys.indexOf(aspect).coerceAtLeast(0)], "⌕ Поиск канала…"
+            L.t("♫ Звуковая дорожка…"), L.t("≡ Субтитры…"),
+            L.t("▭ Пропорции: ") + aspectNames[aspectKeys.indexOf(aspect).coerceAtLeast(0)], L.t("⌕ Поиск канала…")
         )
-        showChoice("Плеер", items, -1) { when (it) { 0 -> showAudio(); 1 -> showSubs(); 2 -> showAspect(); else -> openSearch() } }
+        showChoice(L.t("Плеер"), items, -1) { when (it) { 0 -> showAudio(); 1 -> showSubs(); 2 -> showAspect(); else -> openSearch() } }
     }
 
     private class TrackOpt(val label: String, val group: Tracks.Group, val idx: Int, val selected: Boolean)
@@ -1497,8 +1544,8 @@ class MainActivity : Activity() {
         }
         val extra = ArrayList<String>()
         if (lab != null && lang != null && !lab.contains(lang, true)) extra.add(lang)
-        if (f.channelCount > 0) extra.add(when (f.channelCount) { 1 -> "моно"; 2 -> "стерео"; 6 -> "5.1"; else -> "${f.channelCount} кан." })
-        val base = lab ?: lang ?: "Дорожка $n"
+        if (f.channelCount > 0) extra.add(when (f.channelCount) { 1 -> L.t("моно"); 2 -> L.t("стерео"); 6 -> "5.1"; else -> L.f("{0} кан.", f.channelCount) })
+        val base = lab ?: lang ?: L.f("Дорожка {0}", n)
         return if (extra.isEmpty()) base else base + " · " + extra.joinToString(", ")
     }
 
@@ -1513,8 +1560,8 @@ class MainActivity : Activity() {
 
     private fun showAudio() {
         val o = trackOpts(C.TRACK_TYPE_AUDIO)
-        if (o.isEmpty()) { toast("Звуковые дорожки не найдены (поток ещё не запущен?)"); return }
-        showChoice("Звуковая дорожка", o.map { it.label }, o.indexOfFirst { it.selected }) { w ->
+        if (o.isEmpty()) { toast(L.t("Звуковые дорожки не найдены (поток ещё не запущен?)")); return }
+        showChoice(L.t("Звуковая дорожка"), o.map { it.label }, o.indexOfFirst { it.selected }) { w ->
             val t = o[w]
             val lang = t.group.getTrackFormat(t.idx).language?.takeIf { it.isNotEmpty() && it != "und" }
             player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
@@ -1522,22 +1569,22 @@ class MainActivity : Activity() {
                 .setPreferredAudioLanguage(lang)
                 .build()
             prefs.edit().putString("alang", lang ?: "").apply()
-            toast("Звук: " + t.label)
+            toast(L.t("Звук: ") + t.label)
         }
     }
 
     private fun showSubs() {
         val o = trackOpts(C.TRACK_TYPE_TEXT)
         val off = C.TRACK_TYPE_TEXT in player.trackSelectionParameters.disabledTrackTypes
-        if (o.isEmpty() && off) { toast("Субтитры в этом потоке не найдены"); return }
-        val items = listOf("Выключены") + o.map { it.label }
+        if (o.isEmpty() && off) { toast(L.t("Субтитры в этом потоке не найдены")); return }
+        val items = listOf(L.t("Выключены")) + o.map { it.label }
         val checked = if (off) 0 else o.indexOfFirst { it.selected } + 1
-        showChoice("Субтитры", items, checked) { w ->
+        showChoice(L.t("Субтитры"), items, checked) { w ->
             val b = player.trackSelectionParameters.buildUpon()
             if (w == 0) {
                 b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
                 prefs.edit().putString("sub", "off").apply()
-                toast("Субтитры выключены")
+                toast(L.t("Субтитры выключены"))
             } else {
                 val t = o[w - 1]
                 val lang = t.group.getTrackFormat(t.idx).language?.takeIf { it.isNotEmpty() && it != "und" }
@@ -1545,7 +1592,7 @@ class MainActivity : Activity() {
                     .setOverrideForType(TrackSelectionOverride(t.group.mediaTrackGroup, t.idx))
                     .setPreferredTextLanguage(lang)
                 prefs.edit().putString("sub", lang ?: "on").apply()
-                toast("Субтитры: " + t.label)
+                toast(L.t("Субтитры: ") + t.label)
             }
             player.trackSelectionParameters = b.build()
         }
@@ -1574,19 +1621,19 @@ class MainActivity : Activity() {
     }
 
     private fun openSearch() {
-        if (chans.isEmpty()) { toast("Сначала загрузите плейлист"); return }
+        if (chans.isEmpty()) { toast(L.t("Сначала загрузите плейлист")); return }
         val et = EditText(this).apply {
             setSingleLine(); setText(query); setSelection(text.length)
-            hint = "Название канала"; textSize = 20f
+            hint = L.t("Название канала"); textSize = 20f
             imeOptions = EditorInfo.IME_ACTION_SEARCH
             setTextColor(Color.WHITE); setHintTextColor(0xFF667780.toInt())
             setPadding(dp(24), dp(12), dp(24), dp(12))
         }
         val d = android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("Поиск канала")
+            .setTitle(L.t("Поиск канала"))
             .setView(et)
-            .setPositiveButton("Найти") { _, _ -> doSearch(et.text.toString()) }
-            .setNegativeButton("Отмена", null)
+            .setPositiveButton(L.t("Найти")) { _, _ -> doSearch(et.text.toString()) }
+            .setNegativeButton(L.t("Отмена"), null)
             .create()
         et.setOnEditorActionListener { _, _, _ -> d.getButton(android.app.AlertDialog.BUTTON_POSITIVE)?.performClick(); true }
         d.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
@@ -1597,7 +1644,7 @@ class MainActivity : Activity() {
         query = q.trim()
         grp = if (query.isEmpty()) G_ALL else G_FIND
         openChans()
-        if (query.isNotEmpty()) toast(if (shown.isEmpty()) "Ничего не найдено: «$query»" else "Найдено: ${shown.size}")
+        if (query.isNotEmpty()) toast(if (shown.isEmpty()) L.f("Ничего не найдено: «{0}»", query) else L.f("Найдено: {0}", shown.size))
         if (shown.isNotEmpty()) chList.requestFocus()
     }
 
@@ -1616,7 +1663,7 @@ class MainActivity : Activity() {
         numBuf.setLength(0); numTv.visibility = View.GONE
         if (n == null) return
         val l = numList()
-        if (n in 1..l.size) { zapGrp = null; playChan(l[n - 1]) } else toast("Нет канала №$n")
+        if (n in 1..l.size) { zapGrp = null; playChan(l[n - 1]) } else toast(L.f("Нет канала №{0}", n))
     }
 
     /* ---------- история и запоминание позиции в архиве ---------- */
@@ -1667,7 +1714,7 @@ class MainActivity : Activity() {
         retries++
         if (arch != null && readyMode != null && player.currentPosition > 0) startPos = player.currentPosition
         retryHls = readyMode == true
-        toast("Связь потеряна, повтор $retries из $maxRetries…")
+        toast(L.f("Связь потеряна, повтор {0} из {1}…", retries, maxRetries))
         ui.removeCallbacks(retryRun)
         ui.postDelayed(retryRun, minOf(1000L shl (retries - 1), 8000L))
         return true
@@ -1693,13 +1740,13 @@ class MainActivity : Activity() {
         startPos = resume[arcKey(c, p)] ?: 0L
         startUrl(arcCands[0].second)
         hud()
-        toast(if (startPos > 0) "Архив: продолжаю с ${fmtT(startPos)} · ${p.title}" else "Архив: " + hm(p.s) + " " + p.title)
+        toast(if (startPos > 0) L.f("Архив: продолжаю с {0} · {1}", fmtT(startPos), p.title) else L.t("Архив: ") + hm(p.s) + " " + p.title)
     }
 
     /** Листать ↑/↓ по списку, выбранному в панели (группа / избранное)? По умолчанию — да; иначе по всем каналам. */
     private fun zapByList() = prefs.getString("zapm", "list") != "all"
 
-    private fun zapLabel() = "Листать ↑/↓: " + if (zapByList()) "по выбранному списку (группа, избранное)" else "по всем каналам, по порядку номеров"
+    private fun zapLabel() = L.t("Листать ↑/↓: ") + if (zapByList()) L.t("по выбранному списку (группа, избранное)") else L.t("по всем каналам, по порядку номеров")
 
     /** Запоминает, из какого списка выбран канал: дальше ↑/↓ листают именно его. */
     private fun setZap() { zapGrp = grp; zapSnap = shown }
@@ -1759,7 +1806,7 @@ class MainActivity : Activity() {
             setBackgroundColor(panelColor())
             setPadding(dp(20), dp(20), dp(20), dp(20))
             visibility = View.GONE
-            addView(TextView(this@MainActivity).apply { text = "Выберите сервер"; textSize = 24f; setTextColor(Color.WHITE); setPadding(0, 0, 0, dp(10)) })
+            addView(TextView(this@MainActivity).apply { text = L.t("Выберите сервер"); textSize = 24f; setTextColor(Color.WHITE); setPadding(0, 0, 0, dp(10)) })
             addView(srvList, LinearLayout.LayoutParams(-1, 0, 1f))
         }
         root.addView(srvPanel, FrameLayout.LayoutParams((resources.displayMetrics.widthPixels * 0.7f).toInt(), -1, Gravity.CENTER_HORIZONTAL))
@@ -1771,7 +1818,7 @@ class MainActivity : Activity() {
                 prefs.edit().putString("pl", sv.pl).putString("epg", sv.epg).putString("srvn", sv.name).apply()
                 closePanels()
                 // программа скачивается заново сама, если у нового сервера другой её адрес; принудительно — только по кнопке в настройках
-                if (same) toast("Этот сервер уже выбран") else loadAll(false)
+                if (same) toast(L.t("Этот сервер уже выбран")) else loadAll(false)
             }
         }
     }
@@ -1786,7 +1833,7 @@ class MainActivity : Activity() {
         val c = cur ?: return
         val nx = epg[c.eid]?.firstOrNull { it.s >= a.e }
         if (nx != null && nx.s < now()) playArch(nx)
-        else { playChan(c); toast("Архив закончился — прямой эфир") }
+        else { playChan(c); toast(L.t("Архив закончился — прямой эфир")) }
     }
 
     /** «О программе»: версия, описание, изменения в текущей версии, разработчик. */
@@ -1800,11 +1847,11 @@ class MainActivity : Activity() {
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), dp(8), dp(24), dp(8))
-            addView(tx("Версия $ver · сборка $build", 17f, Theme.accent))
-            addView(tx("Разработчик: " + getString(R.string.about_dev), 16f, Color.WHITE, 4))
-            addView(tx("О ПРОГРАММЕ", 12f, gray, 16))
+            addView(tx(L.f("Версия {0} · сборка {1}", ver, build), 17f, Theme.accent))
+            addView(tx(L.t("Разработчик: ") + getString(R.string.about_dev), 16f, Color.WHITE, 4))
+            addView(tx(L.t("О ПРОГРАММЕ"), 12f, gray, 16))
             addView(tx(getString(R.string.about_desc), 16f, Color.WHITE, 3))
-            addView(tx("ЧТО НОВОГО В ВЕРСИИ $ver", 12f, gray, 16))
+            addView(tx(L.f("ЧТО НОВОГО В ВЕРСИИ {0}", ver), 12f, gray, 16))
             addView(tx(getString(R.string.about_changes), 16f, Color.WHITE, 3))
         }
         // фокусируемый ScrollView: на пульте текст прокручивается стрелками
@@ -1812,13 +1859,13 @@ class MainActivity : Activity() {
         android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
             .setTitle(getString(R.string.app_name))
             .setView(sv)
-            .setPositiveButton("Закрыть", null)
+            .setPositiveButton(L.t("Закрыть"), null)
             .show()
     }
 
     private fun openServers() {
         val l = repo.servers()
-        if (l.isEmpty()) { toast("Список серверов пуст. Загрузите servers.txt кнопкой «Загрузить файл…»"); openSetup(); return }
+        if (l.isEmpty()) { toast(L.t("Список серверов пуст. Загрузите servers.txt кнопкой «Загрузить файл…»")); openSetup(); return }
         srvBackToSetup = setup.visibility == View.VISIBLE
         val act = prefs.getString("srvn", "") ?: ""
         ad(srvList).active = act
@@ -1833,10 +1880,10 @@ class MainActivity : Activity() {
             val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
             i.addCategory(Intent.CATEGORY_OPENABLE)
             i.type = "*/*"
-            if (!canHandle(i)) throw IOException("нет окна выбора файлов")
+            if (!canHandle(i)) throw IOException(L.t("нет окна выбора файлов"))
             startActivityForResult(i, 7)
         } catch (e: Exception) {
-            toast("Нет выбора файлов. Положите servers.txt в " + getExternalFilesDir(null)?.absolutePath)
+            toast(L.t("Нет выбора файлов. Положите servers.txt в ") + getExternalFilesDir(null)?.absolutePath)
         }
     }
 
@@ -1882,10 +1929,10 @@ class MainActivity : Activity() {
             i.addCategory(Intent.CATEGORY_OPENABLE)
             i.type = "application/json"
             i.putExtra(Intent.EXTRA_TITLE, name)
-            if (!canHandle(i)) throw IOException("нет окна выбора файлов")
+            if (!canHandle(i)) throw IOException(L.t("нет окна выбора файлов"))
             startActivityForResult(i, RC_EXPORT)
         } catch (e: Exception) {
-            toast("Нет окна выбора файлов — сохраняю в «Загрузки» и в папку приложения")
+            toast(L.t("Нет окна выбора файлов — сохраняю в «Загрузки» и в папку приложения"))
             exportSettings()
         }
     }
@@ -1945,26 +1992,26 @@ class MainActivity : Activity() {
             val bytes = SettingsBackup.export(prefs.all, appVersion(), SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date()))
                 .toByteArray(Charsets.UTF_8)
             if (u != null) {
-                (contentResolver.openOutputStream(u, "wt") ?: throw IOException("нет доступа к файлу")).use { it.write(bytes) }
-                runOnUiThread { toast("Настройки сохранены в файл") }
+                (contentResolver.openOutputStream(u, "wt") ?: throw IOException(L.t("нет доступа к файлу"))).use { it.write(bytes) }
+                runOnUiThread { toast(L.t("Настройки сохранены в файл")) }
                 return
             }
             val lines = ArrayList<String>()
             var err = ""
             try {
-                val dir = getExternalFilesDir(null) ?: throw IOException("нет папки приложения")
+                val dir = getExternalFilesDir(null) ?: throw IOException(L.t("нет папки приложения"))
                 val f = File(dir, SettingsBackup.FILE_NAME)
                 f.writeBytes(bytes)
-                lines.add("Папка приложения:\n" + f.absolutePath)
+                lines.add(L.t("Папка приложения:\n") + f.absolutePath)
             } catch (e: Exception) { err = e.javaClass.simpleName + ": " + e.message }
-            if (saveToDownloads(bytes, name)) lines.add(0, "Папка «Загрузки»:\n$name")
+            if (saveToDownloads(bytes, name)) lines.add(0, L.f("Папка «Загрузки»:\n{0}", name))
             runOnUiThread {
-                if (lines.isEmpty()) showInfo("Не удалось сохранить", err.ifEmpty { "некуда записать файл" })
-                else showInfo("Настройки сохранены", lines.joinToString("\n\n"))
+                if (lines.isEmpty()) showInfo(L.t("Не удалось сохранить"), err.ifEmpty { L.t("некуда записать файл") })
+                else showInfo(L.t("Настройки сохранены"), lines.joinToString("\n\n"))
             }
         } catch (e: Exception) {
             val why = e.javaClass.simpleName + ": " + e.message
-            runOnUiThread { showInfo("Не удалось сохранить", why) }
+            runOnUiThread { showInfo(L.t("Не удалось сохранить"), why) }
         }
     }
 
@@ -1974,7 +2021,7 @@ class MainActivity : Activity() {
             val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
             i.addCategory(Intent.CATEGORY_OPENABLE)
             i.type = "*/*"
-            if (!canHandle(i)) throw IOException("нет окна выбора файлов")
+            if (!canHandle(i)) throw IOException(L.t("нет окна выбора файлов"))
             startActivityForResult(i, RC_IMPORT)
         } catch (e: Exception) {
             Thread {
@@ -1987,7 +2034,7 @@ class MainActivity : Activity() {
                     d != null -> readBackup(d, null)
                     lg != null -> readBackup(null, lg)
                     else -> runOnUiThread {
-                        toast("Нет выбора файлов. Положите " + SettingsBackup.FILE_NAME + " в " + dir?.absolutePath + " или восстановите по ссылке")
+                        toast(L.t("Нет выбора файлов. Положите ") + SettingsBackup.FILE_NAME + L.t(" в ") + dir?.absolutePath + L.t(" или восстановите по ссылке"))
                     }
                 }
             }.start()
@@ -2000,16 +2047,16 @@ class MainActivity : Activity() {
             val m = SettingsBackup.parse(Iptv.text(load()))
             runOnUiThread { confirmRestore(m) }
         } catch (e: SettingsBackup.BadBackup) {
-            runOnUiThread { toast(e.message ?: "Это не файл настроек") }
+            runOnUiThread { toast(e.message ?: L.t("Это не файл настроек")) }
         } catch (e: TooBigException) {
-            runOnUiThread { toast("Файл слишком большой для файла настроек") }
+            runOnUiThread { toast(L.t("Файл слишком большой для файла настроек")) }
         } catch (e: Exception) {
             runOnUiThread { toast(failMsg) }
         }
     }
 
-    private fun readBackup(u: Uri?, f: File?) = runBackupRead("Не удалось прочитать файл") {
-        val ins = (if (u != null) contentResolver.openInputStream(u) else f?.inputStream()) ?: throw IOException("нет доступа к файлу")
+    private fun readBackup(u: Uri?, f: File?) = runBackupRead(L.t("Не удалось прочитать файл")) {
+        val ins = (if (u != null) contentResolver.openInputStream(u) else f?.inputStream()) ?: throw IOException(L.t("нет доступа к файлу"))
         ins.use { Iptv.readLimited(it, SettingsBackup.MAX_BYTES) }
     }
 
@@ -2023,28 +2070,28 @@ class MainActivity : Activity() {
         val pad = dp(20)
         val box = FrameLayout(this).apply { setPadding(pad, dp(8), pad, 0); addView(et, FrameLayout.LayoutParams(-1, -2)) }
         android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("Восстановить по ссылке")
-            .setMessage("Прямая ссылка на файл настроек (http или https).")
+            .setTitle(L.t("Восстановить по ссылке"))
+            .setMessage(L.t("Прямая ссылка на файл настроек (http или https)."))
             .setView(box)
-            .setPositiveButton("Скачать") { _, _ ->
+            .setPositiveButton(L.t("Скачать")) { _, _ ->
                 val url = et.text.toString().trim()
-                if (!url.startsWith("http://", true) && !url.startsWith("https://", true)) toast("Ссылка должна начинаться с http:// или https://")
+                if (!url.startsWith("http://", true) && !url.startsWith("https://", true)) toast(L.t("Ссылка должна начинаться с http:// или https://"))
                 else {
-                    toast("Загрузка…")
-                    Thread { runBackupRead("Не удалось скачать файл") { Iptv.http(url, false, SettingsBackup.MAX_BYTES) } }.start()
+                    toast(L.t("Загрузка…"))
+                    Thread { runBackupRead(L.t("Не удалось скачать файл")) { Iptv.http(url, false, SettingsBackup.MAX_BYTES) } }.start()
                 }
             }
-            .setNegativeButton("Отмена", null)
+            .setNegativeButton(L.t("Отмена"), null)
             .show()
     }
 
     private fun confirmRestore(m: Map<String, Any>) {
         if (isFinishing || isDestroyed) return
         android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("Восстановить настройки?")
-            .setMessage("Параметров в файле: ${m.size}. Текущие настройки (сервер, оформление, избранное, кнопки пульта…) будут заменены, экран перезапустится.")
-            .setPositiveButton("Восстановить") { _, _ -> applyRestore(m) }
-            .setNegativeButton("Отмена", null)
+            .setTitle(L.t("Восстановить настройки?"))
+            .setMessage(L.f("Параметров в файле: {0}. Текущие настройки (сервер, оформление, избранное, кнопки пульта…) будут заменены, экран перезапустится.", m.size))
+            .setPositiveButton(L.t("Восстановить")) { _, _ -> applyRestore(m) }
+            .setNegativeButton(L.t("Отмена"), null)
             .show()
     }
 
@@ -2077,20 +2124,20 @@ class MainActivity : Activity() {
             Thread {
                 try {
                     // тот же лимит и та же кодировка (UTF-8 / windows-1251, gzip, BOM), что и у сетевого плейлиста
-                    val bytes = (contentResolver.openInputStream(u) ?: throw IOException("нет доступа к файлу"))
+                    val bytes = (contentResolver.openInputStream(u) ?: throw IOException(L.t("нет доступа к файлу")))
                         .use { Iptv.readLimited(it, Iptv.MAX_PLAYLIST) }
                     val t = Iptv.text(bytes)
                     val isPlaylist = repo.importText(t)
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         if (isPlaylist) { closePanels(); loadAll(false) }
-                        else if (Iptv.parseServers(t).isEmpty()) toast("В файле нет адресов. Формат: Название | http://… | EPG")
+                        else if (Iptv.parseServers(t).isEmpty()) toast(L.t("В файле нет адресов. Формат: Название | http://… | EPG"))
                         else openServers()
                     }
                 } catch (e: TooBigException) {
-                    runOnUiThread { toast("Файл слишком большой (лимит ${Iptv.MAX_PLAYLIST / 1048576} МБ)") }
+                    runOnUiThread { toast(L.f("Файл слишком большой (лимит {0} МБ)", Iptv.MAX_PLAYLIST / 1048576)) }
                 } catch (e: Exception) {
-                    runOnUiThread { toast("Не удалось прочитать файл") }
+                    runOnUiThread { toast(L.t("Не удалось прочитать файл")) }
                 }
             }.start()
         }
@@ -2128,7 +2175,7 @@ class MainActivity : Activity() {
         applyChannels(Session.chans, "")
         if (epg.isEmpty()) {
             // программа к моменту смены темы ещё не успела загрузиться — берём её из кэша (быстро, без скачивания)
-            epgStatus = "загрузка…"
+            epgStatus = L.t("загрузка…")
             val cs = chans; val g = loadGen; val tz = tzMin(); val pe = plEpgUrl
             Thread { loadEpgNow(cs, pe, false, tz, g) }.start()
         }
@@ -2138,8 +2185,8 @@ class MainActivity : Activity() {
         val gen = ++loadGen   // результаты более ранних загрузок будут отброшены
         val pl = prefs.getString("pl", "") ?: ""
         val tz = tzMin()
-        epg = emptyMap(); Session.epg = emptyMap(); epgStatus = "загрузка…"
-        toast("Загрузка плейлиста…")
+        epg = emptyMap(); Session.epg = emptyMap(); epgStatus = L.t("загрузка…")
+        toast(L.t("Загрузка плейлиста…"))
         Thread {
             try {
                 val loaded = repo.loadPlaylist(pl)
@@ -2148,14 +2195,14 @@ class MainActivity : Activity() {
                 if (gen != loadGen) return@Thread
                 runOnUiThread {
                     if (gen != loadGen || isFinishing || isDestroyed) return@runOnUiThread
-                    applyChannels(list.ch, if (fromCache) "Сервер недоступен — показан сохранённый список: ${list.ch.size}" else "Каналов: ${list.ch.size}")
+                    applyChannels(list.ch, if (fromCache) L.f("Сервер недоступен — показан сохранённый список: {0}", list.ch.size) else L.f("Каналов: {0}", list.ch.size))
                     Session.chans = chans; Session.groups = groups; Session.pl = pl; Session.plEpgUrl = list.epgUrl
                 }
                 if (gen != loadGen) return@Thread
                 plEpgUrl = list.epgUrl
                 loadEpgNow(list.ch, list.epgUrl, force, tz, gen)
             } catch (e: Exception) {
-                runOnUiThread { if (gen == loadGen) { toast("Ошибка: " + Iptv.safeMsg(e)); if (chans.isEmpty()) openSetup() } }
+                runOnUiThread { if (gen == loadGen) { toast(L.t("Ошибка: ") + Iptv.safeMsg(e)); if (chans.isEmpty()) openSetup() } }
             }
         }.start()
     }
@@ -2164,7 +2211,7 @@ class MainActivity : Activity() {
     private fun loadEpgNow(chs: List<Channel>, plEpg: String, force: Boolean, tz: Int, gen: Int = loadGen) {
         repo.loadEpg(chs, plEpg, getString(R.string.default_epg), force, tz, object : EpgListener {
             override fun onNoUrl() {
-                runOnUiThread { epgStatus = "адрес не указан"; toast("В плейлисте нет адреса программы передач (url-tvg) — его можно указать в настройках") }
+                runOnUiThread { epgStatus = L.t("адрес не указан"); toast(L.t("В плейлисте нет адреса программы передач (url-tvg) — его можно указать в настройках")) }
             }
 
             override fun onEpg(eids: List<String>, map: Map<String, List<Prog>>, matched: Int) {
@@ -2173,10 +2220,10 @@ class MainActivity : Activity() {
                     if (gen != loadGen) return@runOnUiThread
                     epg = map
                     Session.epg = map
-                    epgStatus = "передач $total, каналов с программой $matched из ${chs.size}"
-                    toast("Программа: $epgStatus")
+                    epgStatus = L.f("передач {0}, каналов с программой {1} из {2}", total, matched, chs.size)
+                    toast(L.f("Программа: {0}", L.t(epgStatus)))
                     if (chPanel.visibility == View.VISIBLE && !moving) { val sp = chList.selectedItemPosition; renderChans(); chList.setSelection(sp.coerceAtLeast(0)) }
-                    if (setup.visibility == View.VISIBLE) tvStat.text = "Программа передач: $epgStatus"
+                    if (setup.visibility == View.VISIBLE) tvStat.text = L.f("Программа передач: {0}", L.t(epgStatus))
                     hud()
                 }
             }
@@ -2184,9 +2231,9 @@ class MainActivity : Activity() {
             override fun onError(e: Throwable) {
                 runOnUiThread {
                     if (gen != loadGen) return@runOnUiThread
-                    epgStatus = "ошибка: " + Iptv.safeMsg(e) + (if (e.message?.contains("403") == true) " — сервер отклонил запрос; проверьте ссылку в браузере или задайте User-Agent в настройках" else "")
-                    toast("Программа передач: $epgStatus")
-                    if (setup.visibility == View.VISIBLE) tvStat.text = "Программа передач: $epgStatus"
+                    epgStatus = L.t("ошибка: ") + Iptv.safeMsg(e) + (if (e.message?.contains("403") == true) L.t(" — сервер отклонил запрос; проверьте ссылку в браузере или задайте User-Agent в настройках") else "")
+                    toast(L.f("Программа передач: {0}", L.t(epgStatus)))
+                    if (setup.visibility == View.VISIBLE) tvStat.text = L.f("Программа передач: {0}", L.t(epgStatus))
                 }
             }
         })
@@ -2274,7 +2321,7 @@ class MainActivity : Activity() {
         // «Назад» во время архива — возврат в прямой эфир
         val live0 = cur
         if (k == KeyEvent.KEYCODE_BACK && arch != null && live0 != null) {
-            if (e.action == KeyEvent.ACTION_UP) { playChan(live0); toast("Прямой эфир") }
+            if (e.action == KeyEvent.ACTION_UP) { playChan(live0); toast(L.t("Прямой эфир")) }
             return true
         }
         if (k !in live) return super.dispatchKeyEvent(e)
@@ -2299,9 +2346,9 @@ class MainActivity : Activity() {
     private fun confirmExit() {
         if (exitDlg?.isShowing == true) return
         exitDlg = android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("Выйти из программы?")
-            .setPositiveButton("Да") { _, _ -> finish() }
-            .setNegativeButton("Нет", null)
+            .setTitle(L.t("Выйти из программы?"))
+            .setPositiveButton(L.t("Да")) { _, _ -> finish() }
+            .setNegativeButton(L.t("Нет"), null)
             .create().also {
                 it.show()
                 it.getButton(android.app.AlertDialog.BUTTON_NEGATIVE)?.requestFocus()   // по умолчанию — «Нет»

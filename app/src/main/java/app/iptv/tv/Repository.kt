@@ -29,7 +29,7 @@ class Repository(private val ctx: Context, private val prefs: SharedPreferences)
             try {
                 if (f.exists()) l += Iptv.parseServers(Iptv.text(f.readBytes()))
             } catch (e: Exception) {
-                Log.w("Repository", "не удалось прочитать ${f.name}: ${e.javaClass.simpleName}")
+                Log.w("Repository", L.f("не удалось прочитать {0}: {1}", f.name, e.javaClass.simpleName))
             }
         }
         return l.distinctBy { it.pl }
@@ -59,7 +59,7 @@ class Repository(private val ctx: Context, private val prefs: SharedPreferences)
         else try { Iptv.text(Iptv.http(pl)).also { f.writeText(it) } }
         catch (e: Exception) { if (f.exists()) { cached = true; f.readText() } else throw e }
         val list = Iptv.parseM3u(txt)
-        if (list.ch.isEmpty()) throw IOException("в плейлисте нет каналов")
+        if (list.ch.isEmpty()) throw IOException(L.t("в плейлисте нет каналов"))
         return Loaded(list, cached)
     }
 
