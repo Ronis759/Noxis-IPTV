@@ -18,6 +18,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
 import android.widget.AdapterView
 import android.widget.BaseAdapter
 import android.widget.Button
@@ -29,7 +30,11 @@ import android.widget.ListView
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -39,6 +44,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import java.io.IOException
 import java.text.SimpleDateFormat
@@ -88,6 +94,16 @@ class MainActivity : Activity() {
     private lateinit var gmPanel: LinearLayout
     private lateinit var gmList: ListView
     private lateinit var chTitle: TextView
+    private lateinit var numTv: TextView                       // набор номера канала цифрами
+    private val numBuf = StringBuilder()
+    private var query = ""                                     // текст поиска каналов
+    private val history = ArrayList<String>()                  // история просмотра: Channel.okey, свежие первыми
+    private val resume = LinkedHashMap<String, Long>()         // позиции в архиве: «okey@начало» -> мс
+    private var arcOwner: Channel? = null                      // канал текущей архивной передачи
+    private var startPos = 0L                                  // с какой позиции начинать архивную передачу
+    private var aspect = "fit"
+    private var fontPct = 100
+    private lateinit var btFont: Button
     private var epgStatus = "не загружена"
         set(v) { field = v; if (::chTitle.isInitialized) chTitle.text = "Каналы   ·   программа: $v" }
     @Volatile private var loadGen = 0      // номер текущей загрузки плейлиста: устаревшие потоки ничего не публикуют
@@ -108,6 +124,8 @@ class MainActivity : Activity() {
     private var shown: List<Channel> = emptyList()
     private val G_ALL = "Все"
     private val G_FAV = "★ Избранное"
+    private val G_HIST = "🕘 История"
+    private val G_FIND = "🔍 Поиск…"
     private var grp = G_ALL
     private lateinit var favs: PrefSet           // избранные каналы (по Channel.okey), общие для всех плейлистов
     private lateinit var hiddenGroups: PrefSet   // скрытые группы (по названию)
@@ -219,14 +237,24 @@ class MainActivity : Activity() {
         pv.isFocusable = false
         pv.player = player
         pv.setOnClickListener { if (!panelOpen()) openChans() }
-        root.addView(pv, FrameLayout.LayoutParams(-1, -1))
+        root.addView(pv, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
+        aspect = prefs.getString("aspect", "fit") ?: "fit"
+        applyAspect()
+        applyTrackPrefs()
 
+        fontPct = prefs.getInt("fs", 100).coerceIn(70, 160)
+        UiScale.f = fontPct / 100f
+        history.addAll((prefs.getString("hist", "") ?: "").split("\n").filter { it.isNotEmpty() })
+        for (ln in (prefs.getString("resume", "") ?: "").split("\n")) {
+            val i = ln.indexOf('|')
+            if (i > 0) ln.substring(0, i).toLongOrNull()?.let { resume[ln.substring(i + 1)] = it }
+        }
         panelDim = prefs.getInt("dim", 95).coerceIn(DIM_MIN, 100)
         repo = Repository(this, prefs)
         updates = UpdateFlow(this, prefs) { toast(it) }
         favs = PrefSet(prefs.getStringSet("fav", emptySet()) ?: emptySet()) { prefs.edit().putStringSet("fav", HashSet(it)).apply() }
         hiddenGroups = PrefSet(prefs.getStringSet("hg", emptySet()) ?: emptySet()) { prefs.edit().putStringSet("hg", HashSet(it)).apply() }
-        buildHud(); buildSeek(); buildPanels(); buildSetup(); buildServers(); buildGroupMgr(); buildToast()
+        buildHud(); buildSeek(); buildPanels(); buildSetup(); buildServers(); buildGroupMgr(); buildToast(); applyFont()
         // тип архива по умолчанию — flussonic (один раз переводим и ранее сохранённое значение по умолчанию)
         if (prefs.getInt("ctv", 0) < 1) prefs.edit().putString("ct", "flussonic").putInt("ctv", 1).apply()
         ctype = prefs.getString("ct", "flussonic") ?: "flussonic"
@@ -347,6 +375,14 @@ class MainActivity : Activity() {
         val lp = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
         lp.topMargin = dp(24)
         root.addView(toastTv, lp)
+        numTv = TextView(this).apply {
+            textSize = 44f; setTextColor(0xFF6FE3C1.toInt())
+            background = roundBg(0xEE101519.toInt())
+            setPadding(dp(28), dp(12), dp(28), dp(12)); visibility = View.GONE
+        }
+        val lpn = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END)
+        lpn.topMargin = dp(24); lpn.rightMargin = dp(32)
+        root.addView(numTv, lpn)
     }
 
     private fun lv(): ListView = ListView(this).apply {
@@ -391,12 +427,19 @@ class MainActivity : Activity() {
                 "srv" -> openServers()
                 "mgr" -> openGroupMgr()
                 "arc" -> if (cur != null) openArch() else toast("Сначала выберите канал")
+                "find" -> openSearch()
+                "opt" -> openPlayerOptions()
                 else -> {
                     grp = r.title
+                    prefs.edit().putString("lgrp", grp).apply()
                     ad(grpList).active = grp
                     ad(grpList).notifyDataSetChanged()
                     renderChans()
-                    if (shown.isEmpty()) toast(if (grp == G_FAV) "Избранное пусто. Удерживайте OK на канале" else "В группе нет каналов")
+                    if (shown.isEmpty()) toast(when (grp) {
+                        G_FAV -> "Избранное пусто. Удерживайте OK на канале"
+                        G_HIST -> "История пуста"
+                        else -> "В группе нет каналов"
+                    })
                     else chList.requestFocus()
                 }
             }
@@ -476,9 +519,16 @@ class MainActivity : Activity() {
     }
 
     private fun setGroupsExpanded(on: Boolean) {
+        // раскрытая колонка вдвое шире прежней (≈29 % экрана вместо ≈14 %); панель при этом расширяется, чтобы список каналов не сжимался
+        val w = resources.displayMetrics.widthPixels
         val lp = grpList.layoutParams as LinearLayout.LayoutParams
-        if (on) { lp.width = 0; lp.weight = 1f } else { lp.width = dp(72); lp.weight = 0f }
+        if (on) { lp.width = (w * 0.29f).toInt(); lp.weight = 0f } else { lp.width = dp(72); lp.weight = 0f }
         grpList.layoutParams = lp
+        if (::chPanel.isInitialized) {
+            val pl = chPanel.layoutParams
+            pl.width = (w * (if (on) 0.64f else 0.43f)).toInt()
+            chPanel.layoutParams = pl
+        }
         ad(grpList).compact = !on
     }
 
@@ -565,8 +615,20 @@ class MainActivity : Activity() {
         }
         btStart = small(tvButton("")).apply {
             setOnClickListener {
-                prefs.edit().putString("start", if (prefs.getString("start", "fav") == "fav") "all" else "fav").apply()
+                val modes = listOf("fav", "all", "last")
+                val st = prefs.getString("start", "fav")
+                prefs.edit().putString("start", modes[(modes.indexOf(st) + 1) % modes.size]).apply()
                 text = startLabel()
+            }
+        }
+        // размер шрифта: OK — следующее значение (шаг 10), ◄/► — ±10
+        btFont = small(tvButton("")).apply {
+            setOnClickListener { setFont(if (fontPct + 10 > 160) 70 else fontPct + 10) }
+            setOnKeyListener { _, k, e ->
+                if (e.action == KeyEvent.ACTION_DOWN && (k == KeyEvent.KEYCODE_DPAD_LEFT || k == KeyEvent.KEYCODE_DPAD_RIGHT)) {
+                    setFont(fontPct + if (k == KeyEvent.KEYCODE_DPAD_LEFT) -10 else 10)
+                    true
+                } else false
             }
         }
         btSort = small(tvButton("")).apply {
@@ -619,6 +681,7 @@ class MainActivity : Activity() {
         val right = card("Параметры").apply {
             addView(btType); addView(btSort); addView(btStart); addView(btDim)
             addView(dimPreview, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(6) })
+            addView(btFont)
             addView(tvStat)
         }
         val cols = LinearLayout(this).apply {
@@ -680,7 +743,8 @@ class MainActivity : Activity() {
         val c = cur ?: return
         val a = arch
         val p = a ?: nowProg(c)
-        hudT.text = (if (isFav(c)) "★ " else "") + c.name + if (a != null) "  ·  архив" else ""
+        val num = numList().indexOfFirst { it === c }
+        hudT.text = (if (num >= 0) "${num + 1}  " else "") + (if (isFav(c)) "★ " else "") + c.name + if (a != null) "  ·  архив" else ""
         Logos.load(hudLogo, c.logo, true)
         hudP.text = if (p != null) "${hm(p.s)}–${hm(p.e)}  ${p.title}" else ""
         val nx = if (p != null) epg[c.eid]?.firstOrNull { it.s >= p.e } else null
@@ -707,7 +771,10 @@ class MainActivity : Activity() {
         l.add(Row("↺ Архив", tag = "arc", short = "↺"))
         l.add(Row("⇄ Сервер", tag = "srv", short = "⇄"))
         l.add(Row("☰ Группы…", if (hid > 0) "скрыто: $hid" else "", "mgr", short = "☰"))
+        l.add(Row(G_FIND, if (query.isNotEmpty()) "«$query»" else "", "find", short = "🔍"))
+        l.add(Row("🎛 Звук, субтитры, формат", tag = "opt", short = "🎛"))
         l.add(Row(G_FAV, tag = "fav", short = "★"))
+        l.add(Row(G_HIST, tag = "hist", short = "🕘"))
         l.add(Row(G_ALL, tag = "all", short = "▤"))
         for (g in groups) if (g !in hiddenGroups) l.add(Row(g, tag = "g"))
         return l
@@ -729,7 +796,11 @@ class MainActivity : Activity() {
         btSort.text = "Порядок каналов: ${sortNames[m]}"
     }
 
-    private fun startLabel() = "При запуске открывать: " + (if (prefs.getString("start", "fav") == "fav") "★ Избранное" else "Все каналы")
+    private fun startLabel() = "При запуске открывать: " + when (prefs.getString("start", "fav")) {
+        "all" -> "Все каналы"
+        "last" -> "последнюю группу"
+        else -> "★ Избранное"
+    }
 
     private fun saveOrder() = prefs.edit().putString("order", customOrder.joinToString("\n")).apply()
 
@@ -763,6 +834,8 @@ class MainActivity : Activity() {
     private fun renderChans() {
         val all = ordered()
         shown = if (grp == G_FAV) all.filter { isFav(it) }
+        else if (grp == G_HIST) { val m = chans.associateBy { it.okey }; history.mapNotNull { m[it] } }
+        else if (grp == G_FIND) searchIn(all)
         else if (grp == G_ALL) all.filter { it.group !in hiddenGroups }
         else all.filter { it.group == grp }
         val sel = if (moving) chList.selectedItemPosition else -1
@@ -892,6 +965,7 @@ class MainActivity : Activity() {
         btSort.text = "Порядок каналов: ${sortNames[sortMode]}"
         btStart.text = startLabel()
         btDim.text = dimLabel()
+        btFont.text = fontLabel()
         tvStat.text = "Программа передач: $epgStatus"
         setAdvanced(pl.isEmpty())   // если плейлиста нет, сразу показываем поля для ручного ввода
         showPanel(setup)
@@ -910,12 +984,241 @@ class MainActivity : Activity() {
         loadAll(true)
     }
 
+    /* ---------- размер шрифта ---------- */
+    private fun fontLabel() = "Размер шрифта списков: $fontPct%  (◄ ► ±10)"
+
+    private fun setFont(v: Int) {
+        fontPct = v.coerceIn(70, 160)
+        UiScale.f = fontPct / 100f
+        prefs.edit().putInt("fs", fontPct).apply()
+        applyFont()
+        btFont.text = fontLabel()
+    }
+
+    /** Применяет масштаб шрифта к плашкам, сообщениям и всем спискам. */
+    private fun applyFont() {
+        val f = UiScale.f
+        hudT.textSize = 26f * f; hudP.textSize = 18f * f; hudN.textSize = 16f * f
+        seekT.textSize = 18f * f; seekL.textSize = 16f * f; seekR.textSize = 16f * f
+        toastTv.textSize = 18f * f
+        chTitle.textSize = 20f * f; arTitle.textSize = 24f * f
+        for (l in listOf(grpList, chList, dayList, progList, srvList, gmList)) ad(l).notifyDataSetChanged()
+    }
+
+    /* ---------- пропорции картинки ---------- */
+    private val aspectKeys = listOf("fit", "zoom", "fill", "r169", "r43")
+    private val aspectNames = listOf(
+        "По размеру (без искажений)", "Увеличить (края обрезаются)", "Растянуть на весь экран",
+        "16:9 (растянуть по центру)", "4:3 (растянуть по центру)"
+    )
+
+    private fun applyAspect() {
+        val w = resources.displayMetrics.widthPixels
+        val h = resources.displayMetrics.heightPixels
+        var width = -1
+        pv.resizeMode = when (aspect) {
+            "zoom" -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            "fill" -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+            "r169" -> { width = minOf(w, h * 16 / 9); AspectRatioFrameLayout.RESIZE_MODE_FILL }
+            "r43" -> { width = minOf(w, h * 4 / 3); AspectRatioFrameLayout.RESIZE_MODE_FILL }
+            else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+        }
+        val lp = pv.layoutParams as FrameLayout.LayoutParams
+        lp.width = width; lp.height = -1; lp.gravity = Gravity.CENTER
+        pv.layoutParams = lp
+    }
+
+    private fun setAspect(key: String) {
+        aspect = key
+        prefs.edit().putString("aspect", key).apply()
+        applyAspect()
+        toast("Картинка: " + aspectNames[aspectKeys.indexOf(key).coerceAtLeast(0)])
+    }
+
+    private fun cycleAspect() = setAspect(aspectKeys[(aspectKeys.indexOf(aspect) + 1) % aspectKeys.size])
+
+    private fun showAspect() =
+        showChoice("Пропорции картинки", aspectNames, aspectKeys.indexOf(aspect)) { setAspect(aspectKeys[it]) }
+
+    /* ---------- звуковые дорожки и субтитры ---------- */
+    private fun showChoice(title: String, items: List<String>, checked: Int, pick: (Int) -> Unit) {
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle(title)
+            .setSingleChoiceItems(items.toTypedArray(), checked) { d, w -> d.dismiss(); pick(w) }
+            .setNegativeButton("Закрыть", null)
+            .show()
+    }
+
+    private fun openPlayerOptions() {
+        val items = listOf(
+            "🔊 Звуковая дорожка…", "💬 Субтитры…",
+            "▭ Пропорции: " + aspectNames[aspectKeys.indexOf(aspect).coerceAtLeast(0)], "🔍 Поиск канала…"
+        )
+        showChoice("Плеер", items, -1) { when (it) { 0 -> showAudio(); 1 -> showSubs(); 2 -> showAspect(); else -> openSearch() } }
+    }
+
+    private class TrackOpt(val label: String, val group: Tracks.Group, val idx: Int, val selected: Boolean)
+
+    private fun trackLabel(f: Format, n: Int): String {
+        val lab = f.label?.takeIf { it.isNotEmpty() }
+        val lang = f.language?.takeIf { it.isNotEmpty() && it != "und" }?.let {
+            val nm = Locale.forLanguageTag(it).getDisplayLanguage(Locale.getDefault())
+            if (nm.isEmpty() || nm.equals(it, true)) it.uppercase() else nm.replaceFirstChar { c -> c.uppercase() }
+        }
+        val extra = ArrayList<String>()
+        if (lab != null && lang != null && !lab.contains(lang, true)) extra.add(lang)
+        if (f.channelCount > 0) extra.add(when (f.channelCount) { 1 -> "моно"; 2 -> "стерео"; 6 -> "5.1"; else -> "${f.channelCount} кан." })
+        val base = lab ?: lang ?: "Дорожка $n"
+        return if (extra.isEmpty()) base else base + " · " + extra.joinToString(", ")
+    }
+
+    private fun trackOpts(type: Int): List<TrackOpt> {
+        val l = ArrayList<TrackOpt>()
+        for (g in player.currentTracks.groups) {
+            if (g.type != type) continue
+            for (i in 0 until g.length) if (g.isTrackSupported(i)) l.add(TrackOpt(trackLabel(g.getTrackFormat(i), l.size + 1), g, i, g.isTrackSelected(i)))
+        }
+        return l
+    }
+
+    private fun showAudio() {
+        val o = trackOpts(C.TRACK_TYPE_AUDIO)
+        if (o.isEmpty()) { toast("Звуковые дорожки не найдены (поток ещё не запущен?)"); return }
+        showChoice("Звуковая дорожка", o.map { it.label }, o.indexOfFirst { it.selected }) { w ->
+            val t = o[w]
+            val lang = t.group.getTrackFormat(t.idx).language?.takeIf { it.isNotEmpty() && it != "und" }
+            player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                .setOverrideForType(TrackSelectionOverride(t.group.mediaTrackGroup, t.idx))
+                .setPreferredAudioLanguage(lang)
+                .build()
+            prefs.edit().putString("alang", lang ?: "").apply()
+            toast("Звук: " + t.label)
+        }
+    }
+
+    private fun showSubs() {
+        val o = trackOpts(C.TRACK_TYPE_TEXT)
+        val off = C.TRACK_TYPE_TEXT in player.trackSelectionParameters.disabledTrackTypes
+        if (o.isEmpty() && off) { toast("Субтитры в этом потоке не найдены"); return }
+        val items = listOf("Выключены") + o.map { it.label }
+        val checked = if (off) 0 else o.indexOfFirst { it.selected } + 1
+        showChoice("Субтитры", items, checked) { w ->
+            val b = player.trackSelectionParameters.buildUpon()
+            if (w == 0) {
+                b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                prefs.edit().putString("sub", "off").apply()
+                toast("Субтитры выключены")
+            } else {
+                val t = o[w - 1]
+                val lang = t.group.getTrackFormat(t.idx).language?.takeIf { it.isNotEmpty() && it != "und" }
+                b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    .setOverrideForType(TrackSelectionOverride(t.group.mediaTrackGroup, t.idx))
+                    .setPreferredTextLanguage(lang)
+                prefs.edit().putString("sub", lang ?: "on").apply()
+                toast("Субтитры: " + t.label)
+            }
+            player.trackSelectionParameters = b.build()
+        }
+    }
+
+    /** Запомненный язык звука и режим субтитров применяются ко всем следующим каналам. */
+    private fun applyTrackPrefs() {
+        val b = player.trackSelectionParameters.buildUpon()
+        prefs.getString("alang", "")?.takeIf { it.isNotEmpty() }?.let { b.setPreferredAudioLanguage(it) }
+        val sub = prefs.getString("sub", "off") ?: "off"
+        if (sub == "off") b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+        else { b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false); if (sub != "on") b.setPreferredTextLanguage(sub) }
+        player.trackSelectionParameters = b.build()
+    }
+
+    /* ---------- поиск и номера каналов ---------- */
+    /** Каналы с номерами: все нескрытые, в выбранном порядке. */
+    private fun numList(): List<Channel> = ordered().filter { it.group !in hiddenGroups }
+
+    private fun searchIn(all: List<Channel>): List<Channel> {
+        val q = query.trim()
+        if (q.isEmpty()) return emptyList()
+        val nq = Iptv.norm(q)
+        val lq = q.lowercase()
+        return all.filter { (nq.isNotEmpty() && Iptv.norm(it.name).contains(nq)) || it.name.lowercase().contains(lq) }
+    }
+
+    private fun openSearch() {
+        if (chans.isEmpty()) { toast("Сначала загрузите плейлист"); return }
+        val et = EditText(this).apply {
+            setSingleLine(); setText(query); setSelection(text.length)
+            hint = "Название канала"; textSize = 20f
+            imeOptions = EditorInfo.IME_ACTION_SEARCH
+            setTextColor(Color.WHITE); setHintTextColor(0xFF667780.toInt())
+            setPadding(dp(24), dp(12), dp(24), dp(12))
+        }
+        val d = android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Поиск канала")
+            .setView(et)
+            .setPositiveButton("Найти") { _, _ -> doSearch(et.text.toString()) }
+            .setNegativeButton("Отмена", null)
+            .create()
+        et.setOnEditorActionListener { _, _, _ -> d.getButton(android.app.AlertDialog.BUTTON_POSITIVE)?.performClick(); true }
+        d.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+        d.show()
+    }
+
+    private fun doSearch(q: String) {
+        query = q.trim()
+        grp = if (query.isEmpty()) G_ALL else G_FIND
+        openChans()
+        if (query.isNotEmpty()) toast(if (shown.isEmpty()) "Ничего не найдено: «$query»" else "Найдено: ${shown.size}")
+        if (shown.isNotEmpty()) chList.requestFocus()
+    }
+
+    private val numRun = Runnable { commitNum() }
+
+    private fun typeDigit(d: Int) {
+        if (numBuf.length >= 4) numBuf.setLength(0)
+        numBuf.append(d)
+        numTv.text = numBuf.toString(); numTv.visibility = View.VISIBLE
+        ui.removeCallbacks(numRun); ui.postDelayed(numRun, 1800)
+    }
+
+    private fun commitNum() {
+        ui.removeCallbacks(numRun)
+        val n = numBuf.toString().toIntOrNull()
+        numBuf.setLength(0); numTv.visibility = View.GONE
+        if (n == null) return
+        val l = numList()
+        if (n in 1..l.size) { zap = emptyList(); playChan(l[n - 1]) } else toast("Нет канала №$n")
+    }
+
+    /* ---------- история и запоминание позиции в архиве ---------- */
+    private fun addHist(c: Channel) {
+        history.remove(c.okey); history.add(0, c.okey)
+        while (history.size > 30) history.removeAt(history.size - 1)
+        prefs.edit().putString("hist", history.joinToString("\n")).apply()
+    }
+
+    private fun arcKey(c: Channel, p: Prog) = c.okey + "@" + p.s
+
+    /** Запоминает, на каком месте остановились в архивной передаче (не больше 20 передач). Начало и конец (≈1 мин) не запоминаются. */
+    private fun saveArcPos() {
+        val a = arch ?: return
+        val c = arcOwner ?: return
+        if (readyMode == null) return
+        val pos = player.currentPosition
+        val total = (a.e - a.s) * 1000
+        val k = arcKey(c, a)
+        resume.remove(k)
+        if (pos > 60000 && pos < total - 60000) resume[k] = pos
+        while (resume.size > 20) resume.remove(resume.keys.first())
+        prefs.edit().putString("resume", resume.entries.joinToString("\n") { "${it.value}|${it.key}" }).apply()
+    }
+
     /* ---------- воспроизведение ---------- */
     private fun playUrl(url: String, hls: Boolean = false) {
         lastUrl = url; triedHls = hls
         val mi = MediaItem.Builder().setUri(url)
         if (hls) mi.setMimeType(MimeTypes.APPLICATION_M3U8)
-        player.setMediaItem(mi.build())
+        // архив: начинаем с запомненной позиции (или с места обрыва при переподключении)
+        if (arch != null && startPos > 0) player.setMediaItem(mi.build(), startPos) else player.setMediaItem(mi.build())
         player.prepare()
         player.playWhenReady = true
     }
@@ -931,6 +1234,7 @@ class MainActivity : Activity() {
     private fun scheduleRetry(): Boolean {
         if (lastUrl.isEmpty() || retries >= maxRetries) return false
         retries++
+        if (arch != null && readyMode != null && player.currentPosition > 0) startPos = player.currentPosition
         retryHls = readyMode == true
         toast("Связь потеряна, повтор $retries из $maxRetries…")
         ui.removeCallbacks(retryRun)
@@ -939,22 +1243,26 @@ class MainActivity : Activity() {
     }
 
     private fun playChan(c: Channel) {
-        cur = c; arch = null; arcCands = emptyList()
+        saveArcPos()
+        cur = c; arch = null; arcCands = emptyList(); startPos = 0L
         hideSeek.run()
-        prefs.edit().putInt("last", c.idx).apply()
+        prefs.edit().putInt("last", c.idx).putString("lastk", c.okey).apply()
+        addHist(c)
         startUrl(c.url)
         hud()
     }
 
     private fun playArch(p: Prog) {
         val c = cur ?: return
-        arch = p
+        saveArcPos()
+        arch = p; arcOwner = c
         val pref = prefs.getInt("arcv_" + Iptv.hostOf(c.url), -1)
         arcCands = Iptv.arcCandidates(c, p.s, p.e, ctype).sortedByDescending { it.first == pref }
         arcIdx = 0
+        startPos = resume[arcKey(c, p)] ?: 0L
         startUrl(arcCands[0].second)
         hud()
-        toast("Архив: " + hm(p.s) + " " + p.title)
+        toast(if (startPos > 0) "Архив: продолжаю с ${fmtT(startPos)} · ${p.title}" else "Архив: " + hm(p.s) + " " + p.title)
     }
 
     /** ↑/↓: листаем по списку, выбранному в панели (группа / избранное); пока не выбран — по всем нескрытым каналам. */
@@ -1103,11 +1411,18 @@ class MainActivity : Activity() {
                     if (gen != loadGen || isFinishing || isDestroyed) return@runOnUiThread
                     chans = list.ch
                     groups = list.ch.map { it.group }.distinct()
-                    val startFav = prefs.getString("start", "fav") == "fav" && list.ch.any { isFav(it) }
-                    grp = if (startFav) G_FAV else G_ALL
+                    val sm = prefs.getString("start", "fav")
+                    val lg = prefs.getString("lgrp", G_ALL) ?: G_ALL
+                    val startFav = sm == "fav" && list.ch.any { isFav(it) }
+                    grp = when {
+                        startFav -> G_FAV
+                        sm == "last" && (lg == G_FAV || lg == G_HIST || (lg in groups && lg !in hiddenGroups)) -> lg
+                        else -> G_ALL
+                    }
                     zap = if (startFav) ordered().filter { isFav(it) } else emptyList()
                     toast(if (fromCache) "Сервер недоступен — показан сохранённый список: ${list.ch.size}" else "Каналов: ${list.ch.size}")
-                    val first = list.ch.getOrElse(prefs.getInt("last", 0)) { list.ch[0] }
+                    val lk = prefs.getString("lastk", "") ?: ""
+                    val first = list.ch.firstOrNull { lk.isNotEmpty() && it.okey == lk } ?: list.ch.getOrElse(prefs.getInt("last", 0)) { list.ch[0] }
                     // приложение свёрнуто — не запускаем звук в фоне, onStart сам включит выбранный канал
                     if (started) playChan(first) else { cur = first; arch = null }
                 }
@@ -1185,6 +1500,10 @@ class MainActivity : Activity() {
                 }
                 return true
             }
+            if (k == KeyEvent.KEYCODE_SEARCH) {
+                if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) openSearch()
+                return true
+            }
             // запасные клавиши избранного в списке каналов: Меню, «*», жёлтая
             if (chPanel.visibility == View.VISIBLE && chList.hasFocus() &&
                 (k == KeyEvent.KEYCODE_MENU || k == KeyEvent.KEYCODE_STAR || k == KeyEvent.KEYCODE_PROG_YELLOW)) {
@@ -1202,13 +1521,25 @@ class MainActivity : Activity() {
             }
             return super.dispatchKeyEvent(e)
         }
+        // цифры: набор номера канала (номер = позиция в списке всех нескрытых каналов, виден в плашке канала)
+        val dg = when (k) {
+            in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 -> k - KeyEvent.KEYCODE_0
+            in KeyEvent.KEYCODE_NUMPAD_0..KeyEvent.KEYCODE_NUMPAD_9 -> k - KeyEvent.KEYCODE_NUMPAD_0
+            else -> -1
+        }
+        if (dg >= 0) {
+            if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) typeDigit(dg)
+            return true
+        }
         val live = setOf(
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
             KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_PAGE_DOWN,
             KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
             KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_REWIND,
-            KeyEvent.KEYCODE_PROG_RED, KeyEvent.KEYCODE_STAR
+            KeyEvent.KEYCODE_PROG_RED, KeyEvent.KEYCODE_STAR,
+            KeyEvent.KEYCODE_SEARCH, KeyEvent.KEYCODE_PROG_BLUE, KeyEvent.KEYCODE_PROG_YELLOW,
+            KeyEvent.KEYCODE_CAPTIONS, KeyEvent.KEYCODE_MEDIA_AUDIO_TRACK
         )
         // «Назад» в прямом эфире — подтверждение выхода
         if (k == KeyEvent.KEYCODE_BACK && arch == null) {
@@ -1252,7 +1583,12 @@ class MainActivity : Activity() {
 
     private fun onLiveKey(k: Int) {
         when (k) {
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> openChans()
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> if (numBuf.isNotEmpty()) commitNum() else openChans()
+            KeyEvent.KEYCODE_SEARCH -> openSearch()
+            KeyEvent.KEYCODE_PROG_BLUE -> openPlayerOptions()
+            KeyEvent.KEYCODE_PROG_YELLOW -> cycleAspect()
+            KeyEvent.KEYCODE_CAPTIONS -> showSubs()
+            KeyEvent.KEYCODE_MEDIA_AUDIO_TRACK -> showAudio()
             KeyEvent.KEYCODE_DPAD_LEFT -> if (arch != null) seekArch(-30000) else openArch()
             KeyEvent.KEYCODE_DPAD_RIGHT -> if (arch != null) seekArch(30000) else openArch()
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_PAGE_UP -> step(-1)
@@ -1279,6 +1615,7 @@ class MainActivity : Activity() {
     override fun onStop() {
         super.onStop()
         started = false
+        saveArcPos()
         ui.removeCallbacks(retryRun); ui.removeCallbacks(stallRun)
         player.playWhenReady = false
     }

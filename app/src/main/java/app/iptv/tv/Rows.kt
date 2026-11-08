@@ -11,6 +11,9 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 
+/** Масштаб шрифта списков и всплывающих панелей (Настройки → «Размер шрифта»). 1.0 = 100 %. */
+object UiScale { @Volatile var f = 1f }
+
 class Row(val title: String, val sub: String = "", val tag: Any? = null, val dim: Boolean = false, val icon: String = "", val short: String = "")
 
 class RowAdapter(private val ctx: Context) : BaseAdapter() {
@@ -49,11 +52,11 @@ class RowAdapter(private val ctx: Context) : BaseAdapter() {
         box.gravity = Gravity.CENTER_VERTICAL
         (tx.getChildAt(0) as TextView).apply {
             text = if (comp) r.short.ifEmpty { r.title.take(1).uppercase() } else r.title
-            textSize = if (comp) 24f else 20f
+            textSize = if (comp) 24f else 20f * UiScale.f
             gravity = if (comp) Gravity.CENTER_HORIZONTAL else Gravity.START
             setTextColor(if (r.title == active && active.isNotEmpty()) 0xFF6FE3C1.toInt() else if (r.dim) 0xFF8A9AA5.toInt() else Color.WHITE)
         }
-        (tx.getChildAt(1) as TextView).apply { text = r.sub; visibility = if (r.sub.isEmpty() || comp) View.GONE else View.VISIBLE }
+        (tx.getChildAt(1) as TextView).apply { textSize = 15f * UiScale.f; text = r.sub; visibility = if (r.sub.isEmpty() || comp) View.GONE else View.VISIBLE }
         return box
     }
 }
