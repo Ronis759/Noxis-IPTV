@@ -1924,7 +1924,7 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         val u = data?.data
-        if (requestCode == RC_EXPORT && resultCode == RESULT_OK && u != null) { Thread { writeBackup(u) }.start(); return }
+        if (requestCode == RC_EXPORT && resultCode == RESULT_OK && u != null) { Thread { writeBackup(u, backupName()) }.start(); return }
         if (requestCode == RC_IMPORT && resultCode == RESULT_OK && u != null) { Thread { readBackup(u, null) }.start(); return }
         if (requestCode == 7 && resultCode == RESULT_OK && u != null) {
             Thread {
