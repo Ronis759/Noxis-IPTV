@@ -96,6 +96,7 @@ class MainActivity : Activity() {
     private lateinit var chTitle: TextView
     private lateinit var numTv: TextView                       // набор номера канала цифрами
     private val numBuf = StringBuilder()
+    private var moreOpen = false                               // раскрыто меню «Ещё» в левой колонке
     private var query = ""                                     // текст поиска каналов
     private val history = ArrayList<String>()                  // история просмотра: Channel.okey, свежие первыми
     private val resume = LinkedHashMap<String, Long>()         // позиции в архиве: «okey@начало» -> мс
@@ -124,8 +125,8 @@ class MainActivity : Activity() {
     private var shown: List<Channel> = emptyList()
     private val G_ALL = "Все"
     private val G_FAV = "★ Избранное"
-    private val G_HIST = "🕘 История"
-    private val G_FIND = "🔍 Поиск…"
+    private val G_HIST = "◷ История"
+    private val G_FIND = "⌕ Поиск…"
     private var grp = G_ALL
     private lateinit var favs: PrefSet           // избранные каналы (по Channel.okey), общие для всех плейлистов
     private lateinit var hiddenGroups: PrefSet   // скрытые группы (по названию)
@@ -424,6 +425,11 @@ class MainActivity : Activity() {
             val r = ad(grpList).row(pos)
             when (r.tag) {
                 "set" -> openSetup()
+                "more" -> {
+                    moreOpen = !moreOpen
+                    ad(grpList).set(groupRows())
+                    grpList.setSelection(pos)
+                }
                 "srv" -> openServers()
                 "mgr" -> openGroupMgr()
                 "arc" -> if (cur != null) openArch() else toast("Сначала выберите канал")
@@ -768,13 +774,17 @@ class MainActivity : Activity() {
         val hid = groups.count { it in hiddenGroups }
         val l = ArrayList<Row>()
         l.add(Row("⚙ Настройки", tag = "set", short = "⚙"))
+        // раскрывающееся меню под «Настройками»: сервер, поиск, звук
+        l.add(Row(if (moreOpen) "▾ Ещё" else "▸ Ещё", tag = "more", short = if (moreOpen) "▾" else "▸"))
+        if (moreOpen) {
+            l.add(Row("⇄ Сервер", tag = "srv", short = "⇄"))
+            l.add(Row(G_FIND, if (query.isNotEmpty()) "«$query»" else "", "find", short = "⌕"))
+            l.add(Row("♫ Звук, субтитры, формат", tag = "opt", short = "♫"))
+        }
         l.add(Row("↺ Архив", tag = "arc", short = "↺"))
-        l.add(Row("⇄ Сервер", tag = "srv", short = "⇄"))
         l.add(Row("☰ Группы…", if (hid > 0) "скрыто: $hid" else "", "mgr", short = "☰"))
-        l.add(Row(G_FIND, if (query.isNotEmpty()) "«$query»" else "", "find", short = "🔍"))
-        l.add(Row("🎛 Звук, субтитры, формат", tag = "opt", short = "🎛"))
         l.add(Row(G_FAV, tag = "fav", short = "★"))
-        l.add(Row(G_HIST, tag = "hist", short = "🕘"))
+        l.add(Row(G_HIST, tag = "hist", short = "◷"))
         l.add(Row(G_ALL, tag = "all", short = "▤"))
         for (g in groups) if (g !in hiddenGroups) l.add(Row(g, tag = "g"))
         return l
@@ -1051,8 +1061,8 @@ class MainActivity : Activity() {
 
     private fun openPlayerOptions() {
         val items = listOf(
-            "🔊 Звуковая дорожка…", "💬 Субтитры…",
-            "▭ Пропорции: " + aspectNames[aspectKeys.indexOf(aspect).coerceAtLeast(0)], "🔍 Поиск канала…"
+            "♫ Звуковая дорожка…", "≡ Субтитры…",
+            "▭ Пропорции: " + aspectNames[aspectKeys.indexOf(aspect).coerceAtLeast(0)], "⌕ Поиск канала…"
         )
         showChoice("Плеер", items, -1) { when (it) { 0 -> showAudio(); 1 -> showSubs(); 2 -> showAspect(); else -> openSearch() } }
     }
