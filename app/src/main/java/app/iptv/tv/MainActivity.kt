@@ -163,7 +163,8 @@ class MainActivity : Activity() {
     private lateinit var hiddenGroups: PrefSet   // скрытые группы (по названию)
     private lateinit var repo: Repository        // слой данных: серверы, плейлист, программа передач
     private lateinit var updates: UpdateFlow
-    private var zap: List<Channel> = emptyList()              // список, по которому листают ↑/↓ (группа, выбранная в панели)
+    private var zapGrp: String? = null                        // группа, по которой листают ↑/↓ (выбранная в панели); null — все каналы
+    private var zapSnap: List<Channel> = emptyList()          // для «Истории» и поиска: список на момент выбора
     private var cur: Channel? = null
     private var arch: Prog? = null
     private var dayOff = 0
@@ -487,7 +488,7 @@ class MainActivity : Activity() {
             true
         }
         chList.onItemClickListener = AdapterView.OnItemClickListener { _, _, pos, _ ->
-            if (pos < shown.size) { zap = shown; playChan(shown[pos]); closePanels() }
+            if (pos < shown.size) { setZap(); playChan(shown[pos]); closePanels() }
         }
         // удержание OK на канале — в избранное / из избранного
         chList.onItemLongClickListener = AdapterView.OnItemLongClickListener { _, _, pos, _ ->
@@ -496,7 +497,7 @@ class MainActivity : Activity() {
                 android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
                     .setTitle(c.name)
                     .setItems(arrayOf(if (isFav(c)) "★ Убрать из избранного" else "★ В избранное", "⇅ Переместить (↑/↓)", "↺ Архив канала")) { _, w ->
-                        if (w == 0) favAt(pos) else if (w == 1) startMove(pos) else { zap = shown; playChan(c); closePanels(); openArch() }
+                        if (w == 0) favAt(pos) else if (w == 1) startMove(pos) else { setZap(); playChan(c); closePanels(); openArch() }
                     }.show()
             }
             true
@@ -674,7 +675,7 @@ class MainActivity : Activity() {
 
     /** Показ или скрытие группы изменилось: обновляем список групп, каналы и значки. */
     private fun onGroupsChanged() {
-        zap = emptyList()
+        zapGrp?.let { if (it in hiddenGroups) zapGrp = null }
         ad(grpList).set(groupRows())
         renderChans()
         refreshRail()
@@ -1071,7 +1072,6 @@ class MainActivity : Activity() {
         sortMode = m
         if (m == "custom" && customOrder.isEmpty()) { customOrder = chans.map { it.okey }.toMutableList(); saveOrder() }
         prefs.edit().putString("sort", m).apply()
-        zap = emptyList()
         btSort.text = "Порядок каналов: ${sortNames[m]}"
     }
 
@@ -1104,11 +1104,11 @@ class MainActivity : Activity() {
         val a = customOrder.indexOf(shown[pos].okey); val b = customOrder.indexOf(shown[t].okey)
         if (a < 0 || b < 0) return
         val x = customOrder[a]; customOrder[a] = customOrder[b]; customOrder[b] = x
-        saveOrder(); zap = emptyList()
+        saveOrder()
         renderChans(); chList.setSelection(t)
     }
 
-    private fun stopMove() { moving = false; zap = emptyList(); renderChans(); toast("Порядок сохранён") }
+    private fun stopMove() { moving = false; renderChans(); toast("Порядок сохранён") }
 
     private fun renderChans() {
         val all = ordered()
@@ -1141,7 +1141,7 @@ class MainActivity : Activity() {
     private fun toggleGroup(g: String) {
         val hidden = hiddenGroups.toggle(g)
         if (hidden && grp == g) grp = G_ALL
-        zap = emptyList()
+        if (hidden && zapGrp == g) zapGrp = null
     }
 
     /** [keepChannels] — телепрограмма открывается справа от списка каналов, список остаётся на экране. */
@@ -1566,7 +1566,7 @@ class MainActivity : Activity() {
         numBuf.setLength(0); numTv.visibility = View.GONE
         if (n == null) return
         val l = numList()
-        if (n in 1..l.size) { zap = emptyList(); playChan(l[n - 1]) } else toast("Нет канала №$n")
+        if (n in 1..l.size) { zapGrp = null; playChan(l[n - 1]) } else toast("Нет канала №$n")
     }
 
     /* ---------- история и запоминание позиции в архиве ---------- */
@@ -1646,29 +1646,54 @@ class MainActivity : Activity() {
         toast(if (startPos > 0) "Архив: продолжаю с ${fmtT(startPos)} · ${p.title}" else "Архив: " + hm(p.s) + " " + p.title)
     }
 
-    /** Листать ↑/↓ только по списку, выбранному в панели (группа / избранное)? По умолчанию — нет: по всем каналам, как их номера. */
-    private fun zapByList() = prefs.getString("zapm", "all") == "list"
+    /** Листать ↑/↓ по списку, выбранному в панели (группа / избранное)? По умолчанию — да; иначе по всем каналам. */
+    private fun zapByList() = prefs.getString("zapm", "list") != "all"
 
     private fun zapLabel() = "Листать ↑/↓: " + if (zapByList()) "по выбранному списку (группа, избранное)" else "по всем каналам, по порядку номеров"
 
-    /** ↑/↓: строго по порядку, на один канал за нажатие. По умолчанию — по всем нескрытым каналам (номер ±1, как в плашке канала). */
+    /** Запоминает, из какого списка выбран канал: дальше ↑/↓ листают именно его. */
+    private fun setZap() { zapGrp = grp; zapSnap = shown }
+
+    /** Список для ↑/↓, каждый раз собирается заново: всегда совпадает с тем, что видно в панели (сортировка, избранное, свой порядок). */
+    private fun zapList(): List<Channel> {
+        val g = zapGrp ?: return emptyList()
+        return when (g) {
+            G_ALL -> emptyList()
+            G_FAV -> ordered().filter { isFav(it) }
+            G_HIST, G_FIND -> zapSnap
+            else -> ordered().filter { it.group == g }
+        }
+    }
+
+    /** ↑/↓: строго по порядку, на один канал за нажатие. */
     private fun step(d: Int) {
         // лишние события кнопки, пришедшие сразу следом за нажатием, игнорируем
         val t = android.os.SystemClock.uptimeMillis()
         if (t - lastStepAt < 250) return
         lastStepAt = t
-        var l = if (zapByList()) zap else emptyList()
         val all = ordered()
+        var l = if (zapByList()) zapList() else emptyList()
         if (l.isEmpty()) l = numList()
         if (l.isEmpty()) l = all
         if (l.isEmpty()) return
-        var i = l.indexOfFirst { it === cur }
-        if (i < 0) {   // текущего канала нет в этом списке (скрытая группа и т. п.) — листаем по всем каналам от него
-            l = all
-            i = l.indexOfFirst { it === cur }
+        val i = l.indexOfFirst { it === cur }
+        val n: Channel
+        if (i >= 0) n = l[(i + d + l.size) % l.size]
+        else {
+            // текущего канала нет в списке (например, убран из избранного): берём ближайший канал списка в нужную сторону по общему порядку
+            val inList = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Channel, Boolean>()).apply { addAll(l) }
+            val ai = all.indexOfFirst { it === cur }
+            if (ai < 0) n = if (d > 0) l[0] else l[l.size - 1]
+            else {
+                var found: Channel? = null
+                for (k in 1..all.size) {
+                    val c = all[((ai + (if (d > 0) k else -k)) % all.size + all.size) % all.size]
+                    if (c in inList) { found = c; break }
+                }
+                n = found ?: l[0]
+            }
         }
-        val n = if (i < 0) (if (d > 0) 0 else l.size - 1) else (i + d + l.size) % l.size
-        playChan(l[n])
+        playChan(n)
     }
 
     /* ---------- серверы и файлы ---------- */
@@ -2034,7 +2059,7 @@ class MainActivity : Activity() {
             sm == "last" && (lg == G_FAV || lg == G_HIST || (lg in groups && lg !in hiddenGroups)) -> lg
             else -> G_ALL
         }
-        zap = if (startFav) ordered().filter { isFav(it) } else emptyList()
+        zapGrp = if (startFav) G_FAV else null
         if (msg.isNotEmpty()) toast(msg)
         val lk = prefs.getString("lastk", "") ?: ""
         val first = ch.firstOrNull { lk.isNotEmpty() && it.okey == lk } ?: ch.getOrElse(prefs.getInt("last", 0)) { ch[0] }
