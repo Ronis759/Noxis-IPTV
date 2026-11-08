@@ -66,6 +66,9 @@ class MainActivity : Activity() {
     private lateinit var hudBox: LinearLayout
     private lateinit var hudT: TextView
     private lateinit var hudP: TextView
+    private lateinit var hudLeft: TextView
+    private lateinit var bufView: ProgressBar
+    private lateinit var hudBar: ProgressBar
     private lateinit var hudN: TextView
     private var lastHoldSeek = 0L
     private lateinit var toastTv: TextView
@@ -194,6 +197,7 @@ class MainActivity : Activity() {
         override fun run() { if (seekBox.visibility == View.VISIBLE && arch != null) { updateSeek(); ui.postDelayed(this, 500) } }
     }
     private val hideHud = Runnable { hudBox.visibility = View.GONE }
+    private val showBuf = Runnable { bufView.visibility = View.VISIBLE }
     private val hideToast = Runnable { toastTv.visibility = View.GONE }
 
     private fun dp(x: Int) = (x * resources.displayMetrics.density).toInt()
@@ -234,8 +238,9 @@ class MainActivity : Activity() {
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 ui.removeCallbacks(stallRun)
+                ui.removeCallbacks(showBuf); bufView.visibility = View.GONE
                 when (state) {
-                    Player.STATE_BUFFERING -> ui.postDelayed(stallRun, 20000)
+                    Player.STATE_BUFFERING -> { ui.postDelayed(stallRun, 20000); ui.postDelayed(showBuf, 700) }
                     Player.STATE_READY -> {
                         readyMode = triedHls; retries = 0
                         // запоминаем рабочий формат архива для этого сервера
@@ -275,6 +280,14 @@ class MainActivity : Activity() {
         pv.player = player
         pv.setOnClickListener { if (!panelOpen()) openChans() }
         root.addView(pv, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
+        // индикатор буферизации поверх видео, под панелями; появляется не сразу, чтобы не мигать на коротких паузах
+        bufView = ProgressBar(this).apply {
+            indeterminateTintList = ColorStateList.valueOf(Theme.accent)
+            background = roundBg(Theme.hud)
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+            isFocusable = false; visibility = View.GONE
+        }
+        root.addView(bufView, FrameLayout.LayoutParams(dp(76), dp(76), Gravity.CENTER))
         aspect = prefs.getString("aspect", "fit") ?: "fit"
         applyAspect()
         applyTrackPrefs()
@@ -339,7 +352,23 @@ class MainActivity : Activity() {
         hudP = TextView(this).apply { textSize = 18f; setTextColor(Theme.accent) }
         hudN = TextView(this).apply { textSize = 16f; setTextColor(Theme.gray); maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
         hudP.maxLines = 1; hudP.ellipsize = TextUtils.TruncateAt.END
-        val hudCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(hudT); addView(hudP); addView(hudN) }
+        hudLeft = TextView(this).apply { textSize = 16f; setTextColor(Theme.gray); maxLines = 1; visibility = View.GONE }
+        val hudRow = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            addView(hudP, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(hudLeft, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(16) })
+        }
+        hudBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1000; visibility = View.GONE
+            progressTintList = ColorStateList.valueOf(Theme.accent)
+            progressBackgroundTintList = ColorStateList.valueOf(Theme.stroke)
+        }
+        val hudCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(hudT); addView(hudRow)
+            addView(hudBar, LinearLayout.LayoutParams(-1, dp(4)).apply { topMargin = dp(6); bottomMargin = dp(4) })
+            addView(hudN)
+        }
         hudBox.addView(hudCol, LinearLayout.LayoutParams(0, -2, 1f))
         val lp = FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM)
         lp.setMargins(dp(20), 0, dp(20), dp(28))
@@ -428,7 +457,9 @@ class MainActivity : Activity() {
 
     private fun lv(): ListView = ListView(this).apply {
         divider = null
-        selector = ColorDrawable(Theme.selector)
+        selector = GradientDrawable().apply {   // заметная подсветка: заливка акцентным цветом и рамка
+            setColor(Theme.selector); setStroke(dp(2), Theme.accent); cornerRadius = dp(10).toFloat()
+        }
         isFocusable = true
         adapter = RowAdapter(this@MainActivity)
     }
@@ -1022,6 +1053,12 @@ class MainActivity : Activity() {
         ui.removeCallbacks(hideToast); ui.postDelayed(hideToast, 3000)
     }
 
+    /** «ещё 14 мин» / «ещё 1 ч 05 мин» */
+    private fun leftLabel(sec: Long): String {
+        val m = ((sec + 59) / 60).coerceAtLeast(1)
+        return if (m >= 60) "ещё ${m / 60} ч ${String.format(Locale.US, "%02d", m % 60)} мин" else "ещё $m мин"
+    }
+
     private fun hud() {
         val c = cur ?: return
         val a = arch
@@ -1033,6 +1070,12 @@ class MainActivity : Activity() {
         val nx = if (p != null) epg[c.eid]?.firstOrNull { it.s >= p.e } else null
         hudN.text = if (nx != null) "Далее: ${hm(nx.s)}–${hm(nx.e)}  ${nx.title}" else ""
         hudN.visibility = if (nx != null) View.VISIBLE else View.GONE
+        // полоса прогресса и «ещё N мин» — только для прямого эфира с известной передачей
+        val t = now()
+        if (a == null && p != null && p.e > p.s && t in p.s until p.e) {
+            hudBar.progress = ((t - p.s) * 1000 / (p.e - p.s)).toInt(); hudBar.visibility = View.VISIBLE
+            hudLeft.text = leftLabel(p.e - t); hudLeft.visibility = View.VISIBLE
+        } else { hudBar.visibility = View.GONE; hudLeft.visibility = View.GONE }
         hudBox.visibility = View.VISIBLE
         ui.removeCallbacks(hideHud); ui.postDelayed(hideHud, 4500)
     }
@@ -1118,7 +1161,14 @@ class MainActivity : Activity() {
         else if (grp == G_ALL) all.filter { it.group !in hiddenGroups }
         else all.filter { it.group == grp }
         val sel = if (moving) chList.selectedItemPosition else -1
-        ad(chList).set(shown.mapIndexed { i, it -> Row((if (i == sel) "⇅ " else if (it === cur) "▶ " else "") + (if (isFav(it)) "★ " else "") + it.name, nowProg(it)?.title ?: "", it, false, it.logo) })
+        val nums = java.util.IdentityHashMap<Channel, Int>().also { m -> numList().forEachIndexed { k, c -> m[c] = k + 1 } }
+        val t = now()
+        ad(chList).set(shown.mapIndexed { i, it ->
+            val p = nowProg(it)
+            val mark = (if (i == sel) "⇅" else if (it === cur) "▶" else "") + (if (isFav(it)) (if (i == sel || it === cur) " ★" else "★") else "")
+            Row(it.name, if (p != null) hm(p.s) + "–" + hm(p.e) + "  " + p.title else "", it, false, it.logo,
+                num = nums[it] ?: 0, prog = if (p != null && p.e > p.s) (t - p.s).toFloat() / (p.e - p.s) else -1f, mark = mark)
+        })
         refreshTitle()
     }
 
@@ -1377,7 +1427,7 @@ class MainActivity : Activity() {
     /** Применяет масштаб шрифта к плашкам, сообщениям и всем спискам. */
     private fun applyFont() {
         val f = UiScale.f
-        hudT.textSize = 26f * f; hudP.textSize = 18f * f; hudN.textSize = 16f * f
+        hudT.textSize = 26f * f; hudP.textSize = 18f * f; hudN.textSize = 16f * f; hudLeft.textSize = 16f * f
         seekT.textSize = 18f * f; seekL.textSize = 16f * f; seekR.textSize = 16f * f
         toastTv.textSize = 18f * f
         chTitle.textSize = 20f * f; arTitle.textSize = 24f * f; arPrefix.textSize = 24f * f; arInfo.textSize = 14f * f
