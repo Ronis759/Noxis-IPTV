@@ -2,6 +2,9 @@ package app.iptv.tv
 
 import android.app.Activity
 import android.content.SharedPreferences
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * Проверка обновлений из GitHub и диалоги установки; сама проверка и установка — в [Updater].
@@ -22,15 +25,32 @@ class UpdateFlow(
     @Volatile private var busy = false
     @Volatile private var lastTry = 0L
 
+    /** Понятный текст о состоянии проверки обновлений (виден в Настройки → Обновление): почему нет значка и что нашлось. */
+    @Volatile var status: String = ""
+        private set
+
+    private fun stamp() = SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()).format(Date())
+
+    /** Причина, по которой проверка невозможна, либо «ещё не проверялось». */
+    private fun baseStatus(): String = when {
+        a.getString(R.string.github_repo).trim().isEmpty() -> "отключено: не задан репозиторий (github_repo в strings.xml)"
+        !BuildConfig.UPDATES_ENABLED -> "отключено: APK подписан временным ключом (см. README)"
+        else -> "ещё не проверялось"
+    }
+
     private fun now() = System.currentTimeMillis() / 1000
     private fun alive() = !a.isFinishing && !a.isDestroyed
     private fun mine(): Long = try { Updater.installedCode(a) } catch (e: Exception) { Long.MAX_VALUE }
 
     init {
         // обновление, найденное раньше: показываем значок сразу, без сети
+        status = baseStatus()
+        val t0 = prefs.getLong("upd_t", 0)
+        if (BuildConfig.UPDATES_ENABLED && t0 > 0 && status == "ещё не проверялось")
+            status = "установлена последняя сборка (проверено ${SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()).format(Date(t0 * 1000))})"
         if (BuildConfig.UPDATES_ENABLED) {
             val i = load()
-            if (i != null && i.code > mine()) available = i else if (i != null) forget()
+            if (i != null && i.code > mine()) { available = i; status = "доступна сборка ${i.code} (установлена ${mine()})" } else if (i != null) forget()
         }
     }
 
@@ -46,9 +66,11 @@ class UpdateFlow(
      */
     fun check(manual: Boolean) {
         val repo = a.getString(R.string.github_repo).trim()
-        if (repo.isEmpty()) { if (manual) toast("Не задан репозиторий: впишите github_repo в strings.xml"); return }
+        if (repo.isEmpty()) { status = baseStatus(); if (manual) { toast("Не задан репозиторий: впишите github_repo в strings.xml"); onChange() }; return }
         // Сборка не подписана постоянным ключом (локальная или CI без Secrets): новую версию поверх неё Android не установит — не предлагаем
         if (!BuildConfig.UPDATES_ENABLED) {
+            status = baseStatus()
+            if (manual) onChange()
             if (manual) toast("Эта сборка подписана временным ключом — обновление поверх неё не установится. Подпишите APK своим ключом (см. README)")
             return
         }
@@ -59,6 +81,7 @@ class UpdateFlow(
         if (busy) return
         busy = true
         lastTry = now()
+        status = "проверка…"
         if (manual) toast("Проверка обновлений…")
         Thread {
             try {
@@ -66,6 +89,11 @@ class UpdateFlow(
                 prefs.edit().putLong("upd_t", now()).apply()
                 val m = mine()
                 val newer = info != null && info.code > m
+                status = when {
+                    newer -> "доступна сборка ${info!!.code} (установлена $m)"
+                    info == null -> "в последнем релизе нет APK (проверено ${stamp()})"
+                    else -> "установлена последняя сборка $m (проверено ${stamp()})"
+                }
                 if (newer) { save(info!!); available = info } else { forget(); available = null }
                 a.runOnUiThread {
                     if (!alive()) return@runOnUiThread
@@ -79,6 +107,8 @@ class UpdateFlow(
                     } else if (manual) toast("Установлена последняя версия ($m)")
                 }
             } catch (e: Exception) {
+                status = "ошибка проверки (${stamp()}): " + Iptv.safeMsg(e)
+                if (alive()) onChange()
                 if (manual) a.runOnUiThread { toast("Не удалось проверить обновления: " + Iptv.safeMsg(e)) }
             } finally {
                 busy = false

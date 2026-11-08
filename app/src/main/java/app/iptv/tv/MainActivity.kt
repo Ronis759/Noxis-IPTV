@@ -88,6 +88,7 @@ class MainActivity : Activity() {
     private val secTitles = ArrayList<String>()
     private val secHeads = ArrayList<Button>()
     private val secBodies = ArrayList<LinearLayout>()
+    private val keyBtns = ArrayList<Button>()   // кнопки раздела «Кнопки пульта» (подписи обновляются при сбросе)
     private var srvBackToSetup = false   // панель серверов открыта из настроек (Назад вернёт туда)
     private lateinit var hudLogo: ImageView
     private lateinit var seekBox: LinearLayout
@@ -106,6 +107,7 @@ class MainActivity : Activity() {
     private var railHintText: String? = null                   // подпись выбранного значка (показывается в заголовке списка)
     // окно настроек
     private lateinit var btUpd: Button
+    private lateinit var tvUpdStat: TextView   // состояние проверки обновлений программы
     private lateinit var btShowAllGroups: Button
     private lateinit var groupsBox: LinearLayout
     private lateinit var tvGroupsInfo: TextView
@@ -831,6 +833,7 @@ class MainActivity : Activity() {
             }
         }
         btUpd = small(tvButton("Проверить обновления")).apply { setOnClickListener { updates.check(true) } }
+        tvUpdStat = TextView(this).apply { textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(8), 0, 0) }
         val btAbout = small(tvButton("О программе")).apply { setOnClickListener { showAbout() } }
 
         // ----- Группы каналов: нажатие — показать / скрыть -----
@@ -850,7 +853,7 @@ class MainActivity : Activity() {
             addView(row(btServer, btFile))
             addView(btAdv); addView(advBox)
         }
-        section("Обновление") { addView(btReload); addView(btEpg); addView(btUpd); addView(tvStat) }
+        section("Обновление") { addView(btReload); addView(btEpg); addView(btUpd); addView(tvUpdStat); addView(tvStat) }
         section("Воспроизведение") { addView(btType); addView(btSound); addView(btFindCh) }
         section("Оформление") {
             addView(btTheme); addView(btFont); addView(btDim)
@@ -858,6 +861,40 @@ class MainActivity : Activity() {
         }
         section("Список каналов") { addView(btSort); addView(btStart) }
         section("Группы каналов") { addView(tvGroupsInfo); addView(btShowAllGroups); addView(groupsBox) }
+        // ----- Кнопки пульта: OK / ► — следующее действие, ◄ — предыдущее -----
+        val keyInfo = TextView(this).apply {
+            text = "Назначение кнопок при просмотре эфира. OK или ► — следующее действие, ◄ — предыдущее. " +
+                "Стрелки, OK, «Назад» и цифры не меняются; в списках и меню кнопки работают как раньше."
+            textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(4), 0, dp(4))
+        }
+        for (kb in KeyMap.buttons) {
+            val b = small(tvButton(keyLabel(kb))).apply {
+                setOnClickListener { setKeyAction(kb, KeyMap.next(keyAction(kb.code), 1)); text = keyLabel(kb) }
+                setOnKeyListener { _, k, e ->
+                    if (e.action == KeyEvent.ACTION_DOWN && (k == KeyEvent.KEYCODE_DPAD_LEFT || k == KeyEvent.KEYCODE_DPAD_RIGHT)) {
+                        setKeyAction(kb, KeyMap.next(keyAction(kb.code), if (k == KeyEvent.KEYCODE_DPAD_LEFT) -1 else 1))
+                        text = keyLabel(kb)
+                        true
+                    } else false
+                }
+            }
+            keyBtns.add(b)
+        }
+        val btKeyReset = small(tvButton("Сбросить на стандартные")).apply {
+            gravity = Gravity.CENTER
+            setOnClickListener {
+                val ed = prefs.edit()
+                for (kb in KeyMap.buttons) ed.remove(KeyMap.PREF + kb.code)
+                ed.apply()
+                refreshKeyButtons()
+                toast("Кнопки пульта сброшены")
+            }
+        }
+        section("Кнопки пульта") {
+            addView(keyInfo)
+            for (b in keyBtns) addView(b)
+            addView(btKeyReset)
+        }
         section("Система") { addView(btAbout) }
 
         val btClose = tvButton("Закрыть").apply { gravity = Gravity.CENTER; setOnClickListener { closeSetup() } }
@@ -1119,6 +1156,41 @@ class MainActivity : Activity() {
         btAdv.text = if (on) "Дополнительно  ▴" else "Дополнительно  ▾"
     }
 
+    /** Действие, назначенное на кнопку пульта [code]. */
+    private fun keyAction(code: Int): KeyAction = KeyMap.resolve(code, prefs.getString(KeyMap.PREF + code, null))
+
+    private fun setKeyAction(b: KeyMap.Btn, a: KeyAction) {
+        prefs.edit().putString(KeyMap.PREF + b.code, a.id).apply()
+    }
+
+    private fun keyLabel(b: KeyMap.Btn) = b.name + "  →  " + keyAction(b.code).label
+
+    private fun refreshKeyButtons() {
+        for ((i, kb) in KeyMap.buttons.withIndex()) keyBtns.getOrNull(i)?.text = keyLabel(kb)
+    }
+
+    /** Выполняет действие, назначенное на кнопку пульта (при просмотре эфира). */
+    private fun runKeyAction(a: KeyAction) {
+        when (a) {
+            KeyAction.NONE -> {}
+            KeyAction.FAV -> cur?.let { toggleFav(it); hud() }
+            KeyAction.SOUND -> openPlayerOptions()
+            KeyAction.ASPECT -> cycleAspect()
+            KeyAction.SEARCH -> openSearch()
+            KeyAction.SUBS -> showSubs()
+            KeyAction.AUDIO -> showAudio()
+            KeyAction.INFO -> hud()
+            KeyAction.SETTINGS -> openSetup()
+            KeyAction.CHANNELS -> openChans()
+            KeyAction.ARCHIVE -> openArch()
+            KeyAction.PLAYPAUSE -> { player.playWhenReady = !player.playWhenReady; showSeek() }
+            KeyAction.FWD -> if (arch != null) seekArch(30000) else player.seekTo(player.currentPosition + 30000)
+            KeyAction.BACK30 -> if (arch != null) seekArch(-30000) else player.seekTo(maxOf(0L, player.currentPosition - 30000))
+            KeyAction.PREV -> step(-1)
+            KeyAction.NEXT -> step(1)
+        }
+    }
+
     /** Раскрывает раздел настроек [i] (остальные сворачиваются) или сворачивает все, если [open] = false. */
     private fun showSection(i: Int, open: Boolean) {
         for (k in secBodies.indices) {
@@ -1230,6 +1302,7 @@ class MainActivity : Activity() {
     private fun refreshUpdateUi() {
         if (!::btUpd.isInitialized || !::updates.isInitialized) return
         val i = updates.available
+        if (::tvUpdStat.isInitialized) tvUpdStat.text = "Обновление программы: " + updates.status
         btUpd.text = if (i != null) "⇧ Установить обновление (сборка ${i.code})" else "Проверить обновления"
     }
 
@@ -1814,13 +1887,8 @@ class MainActivity : Activity() {
         val live = setOf(
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
-            KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_PAGE_DOWN,
-            KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_REWIND,
-            KeyEvent.KEYCODE_PROG_RED, KeyEvent.KEYCODE_STAR,
-            KeyEvent.KEYCODE_SEARCH, KeyEvent.KEYCODE_PROG_BLUE, KeyEvent.KEYCODE_PROG_YELLOW,
-            KeyEvent.KEYCODE_CAPTIONS, KeyEvent.KEYCODE_MEDIA_AUDIO_TRACK
-        )
+            KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_PAGE_DOWN
+        ) + KeyMap.buttons.map { it.code }   // переназначаемые кнопки (раздел настроек «Кнопки пульта»)
         // «Назад» в прямом эфире — подтверждение выхода
         if (k == KeyEvent.KEYCODE_BACK && arch == null) {
             if (e.action == KeyEvent.ACTION_UP) confirmExit()
@@ -1862,23 +1930,14 @@ class MainActivity : Activity() {
     }
 
     private fun onLiveKey(k: Int) {
+        // переназначаемые кнопки: действие берётся из настроек (по умолчанию — прежнее поведение)
+        if (KeyMap.find(k) != null) { runKeyAction(keyAction(k)); return }
         when (k) {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> if (numBuf.isNotEmpty()) commitNum() else openChans()
-            KeyEvent.KEYCODE_SEARCH -> openSearch()
-            KeyEvent.KEYCODE_PROG_BLUE -> openPlayerOptions()
-            KeyEvent.KEYCODE_PROG_YELLOW -> cycleAspect()
-            KeyEvent.KEYCODE_CAPTIONS -> showSubs()
-            KeyEvent.KEYCODE_MEDIA_AUDIO_TRACK -> showAudio()
             KeyEvent.KEYCODE_DPAD_LEFT -> if (arch != null) seekArch(-30000) else openArch()
             KeyEvent.KEYCODE_DPAD_RIGHT -> if (arch != null) seekArch(30000) else openArch()
-            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_PAGE_UP -> step(-1)
-            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_DOWN -> step(1)
-            KeyEvent.KEYCODE_MENU -> openSetup()
-            KeyEvent.KEYCODE_INFO -> hud()
-            KeyEvent.KEYCODE_PROG_RED, KeyEvent.KEYCODE_STAR -> cur?.let { toggleFav(it); hud() }
-            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { player.playWhenReady = !player.playWhenReady; showSeek() }
-            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> if (arch != null) seekArch(30000) else player.seekTo(player.currentPosition + 30000)
-            KeyEvent.KEYCODE_MEDIA_REWIND -> if (arch != null) seekArch(-30000) else player.seekTo(maxOf(0L, player.currentPosition - 30000))
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_PAGE_UP -> step(-1)
+            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_PAGE_DOWN -> step(1)
         }
     }
 
