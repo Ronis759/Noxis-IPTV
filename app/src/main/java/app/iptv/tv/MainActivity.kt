@@ -1734,6 +1734,7 @@ class MainActivity : Activity() {
             val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
             i.addCategory(Intent.CATEGORY_OPENABLE)
             i.type = "*/*"
+            if (!canHandle(i)) throw IOException("нет окна выбора файлов")
             startActivityForResult(i, 7)
         } catch (e: Exception) {
             toast("Нет выбора файлов. Положите servers.txt в " + getExternalFilesDir(null)?.absolutePath)
@@ -1743,6 +1744,9 @@ class MainActivity : Activity() {
     /* ---------- резервная копия настроек ---------- */
     private fun appVersion(): String = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "?" } catch (e: Exception) { "?" }
 
+    /** Есть ли в системе приложение, умеющее выполнить [i]. Без проверки на боксах без окна выбора файлов система сама пишет «Действие не поддерживается». */
+    private fun canHandle(i: Intent): Boolean = try { i.resolveActivity(packageManager) != null } catch (e: Exception) { false }
+
     /** Сохранить настройки в файл: системный выбор места; на приставках без него — в папку приложения. */
     private fun exportSettings() {
         val name = "noxis-settings-" + SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date()) + ".json"
@@ -1751,6 +1755,7 @@ class MainActivity : Activity() {
             i.addCategory(Intent.CATEGORY_OPENABLE)
             i.type = "application/json"
             i.putExtra(Intent.EXTRA_TITLE, name)
+            if (!canHandle(i)) throw IOException("нет окна выбора файлов")
             startActivityForResult(i, RC_EXPORT)
         } catch (e: Exception) {
             Thread { writeBackup(null) }.start()
@@ -1783,6 +1788,7 @@ class MainActivity : Activity() {
             val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
             i.addCategory(Intent.CATEGORY_OPENABLE)
             i.type = "*/*"
+            if (!canHandle(i)) throw IOException("нет окна выбора файлов")
             startActivityForResult(i, RC_IMPORT)
         } catch (e: Exception) {
             val dir = getExternalFilesDir(null)
