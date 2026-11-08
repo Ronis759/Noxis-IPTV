@@ -23,8 +23,15 @@ class KeyMapTest {
         assertEquals(KeyAction.FAV, KeyMap.resolve(KeyEvent.KEYCODE_PROG_RED, "bogus"))
     }
 
-    @Test fun navigation_keys_are_not_remappable() {
-        assertNull(KeyMap.find(KeyEvent.KEYCODE_DPAD_UP))
+    @Test fun dpad_arrows_are_remappable_with_old_defaults() {
+        assertEquals(KeyAction.PREV, KeyMap.resolve(KeyEvent.KEYCODE_DPAD_UP, null))
+        assertEquals(KeyAction.NEXT, KeyMap.resolve(KeyEvent.KEYCODE_DPAD_DOWN, null))
+        assertEquals(KeyAction.ARCH_BACK, KeyMap.resolve(KeyEvent.KEYCODE_DPAD_LEFT, null))
+        assertEquals(KeyAction.ARCH_FWD, KeyMap.resolve(KeyEvent.KEYCODE_DPAD_RIGHT, null))
+        assertEquals(KeyAction.SEARCH, KeyMap.resolve(KeyEvent.KEYCODE_DPAD_UP, "search"))
+    }
+
+    @Test fun ok_and_back_are_not_remappable() {
         assertNull(KeyMap.find(KeyEvent.KEYCODE_DPAD_CENTER))
         assertNull(KeyMap.find(KeyEvent.KEYCODE_BACK))
         assertNotNull(KeyMap.find(KeyEvent.KEYCODE_PROG_BLUE))
@@ -40,5 +47,6 @@ class KeyMapTest {
         assertEquals(all.first(), KeyMap.next(all.last(), 1))
         assertEquals(all.last(), KeyMap.next(all.first(), -1))
         assertEquals(KeyAction.FAV, KeyMap.next(KeyAction.NONE, 1))
+        assertEquals(KeyAction.ARCH_FWD, KeyMap.next(KeyAction.ARCH_BACK, 1))
     }
 }

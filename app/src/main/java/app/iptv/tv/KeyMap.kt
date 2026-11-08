@@ -19,7 +19,9 @@ enum class KeyAction(val id: String, val label: String) {
     FWD("fwd", "Вперёд на 30 с"),
     BACK30("back30", "Назад на 30 с"),
     PREV("prev", "Канал выше по списку"),
-    NEXT("next", "Канал ниже по списку");
+    NEXT("next", "Канал ниже по списку"),
+    ARCH_BACK("archback", "Архив / назад на 30 с"),
+    ARCH_FWD("archfwd", "Архив / вперёд на 30 с");
 
     companion object {
         fun byId(id: String?): KeyAction? = values().firstOrNull { it.id == id }
@@ -27,8 +29,9 @@ enum class KeyAction(val id: String, val label: String) {
 }
 
 /**
- * Назначение кнопок пульта при просмотре. Переназначаются только «служебные» кнопки (цветные, меню, info и т. п.):
- * стрелки, OK, «Назад» и цифры остаются как есть, чтобы нельзя было остаться без управления.
+ * Назначение кнопок пульта при просмотре. Переназначаются «служебные» кнопки (цветные, меню, info и т. п.) и стрелки джойстика ↑ ↓ ← →
+ * (только при просмотре эфира; в списках и меню стрелки работают как обычно). OK, «Назад» и цифры остаются как есть,
+ * чтобы нельзя было остаться без управления.
  * Значения по умолчанию повторяют прежнее поведение приложения. Не зависит от Android: проверяется юнит-тестами.
  */
 object KeyMap {
@@ -38,6 +41,10 @@ object KeyMap {
     class Btn(val code: Int, val name: String, val def: KeyAction)
 
     val buttons: List<Btn> = listOf(
+        Btn(KeyEvent.KEYCODE_DPAD_UP, "Джойстик ↑", KeyAction.PREV),
+        Btn(KeyEvent.KEYCODE_DPAD_DOWN, "Джойстик ↓", KeyAction.NEXT),
+        Btn(KeyEvent.KEYCODE_DPAD_LEFT, "Джойстик ←", KeyAction.ARCH_BACK),
+        Btn(KeyEvent.KEYCODE_DPAD_RIGHT, "Джойстик →", KeyAction.ARCH_FWD),
         Btn(KeyEvent.KEYCODE_PROG_RED, "Красная", KeyAction.FAV),
         Btn(KeyEvent.KEYCODE_PROG_GREEN, "Зелёная", KeyAction.NONE),
         Btn(KeyEvent.KEYCODE_PROG_YELLOW, "Жёлтая", KeyAction.ASPECT),

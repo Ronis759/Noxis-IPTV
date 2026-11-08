@@ -892,7 +892,7 @@ class MainActivity : Activity() {
         // ----- Кнопки пульта: OK / ► — следующее действие, ◄ — предыдущее -----
         val keyInfo = TextView(this).apply {
             text = "Назначение кнопок при просмотре эфира. OK или ► — следующее действие, ◄ — предыдущее. " +
-                "Стрелки, OK, «Назад» и цифры не меняются; в списках и меню кнопки работают как раньше."
+                "Стрелки джойстика переназначаются только при просмотре эфира. OK, «Назад» и цифры не меняются; в списках и меню кнопки работают как раньше."
             textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(4), 0, dp(4))
         }
         for (kb in KeyMap.buttons) {
@@ -1229,6 +1229,8 @@ class MainActivity : Activity() {
             KeyAction.BACK30 -> if (arch != null) seekArch(-30000) else player.seekTo(maxOf(0L, player.currentPosition - 30000))
             KeyAction.PREV -> step(-1)
             KeyAction.NEXT -> step(1)
+            KeyAction.ARCH_BACK -> if (arch != null) seekArch(-30000) else openArch()
+            KeyAction.ARCH_FWD -> if (arch != null) seekArch(30000) else openArch()
         }
     }
 
@@ -1641,6 +1643,10 @@ class MainActivity : Activity() {
 
     /** ↑/↓: листаем по списку, выбранному в панели (группа / избранное); пока не выбран — по всем нескрытым каналам. */
     private fun step(d: Int) {
+        // строго один канал на одно нажатие: лишние события кнопки, пришедшие сразу следом, игнорируем
+        val t = android.os.SystemClock.uptimeMillis()
+        if (t - lastStepAt < 300) return
+        lastStepAt = t
         var l = zap
         val all = ordered()
         if (l.isEmpty()) l = all.filter { it.group !in hiddenGroups }
@@ -2185,19 +2191,21 @@ class MainActivity : Activity() {
         if (k !in live) return super.dispatchKeyEvent(e)
         if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) onLiveKey(k)
         // удержание ←/→ в архиве: непрерывная перемотка с ускорением (шаг растёт, пока кнопка зажата)
-        else if (e.action == KeyEvent.ACTION_DOWN && arch != null && (k == KeyEvent.KEYCODE_DPAD_LEFT || k == KeyEvent.KEYCODE_DPAD_RIGHT)) {
+        else if (e.action == KeyEvent.ACTION_DOWN && arch != null && (k == KeyEvent.KEYCODE_DPAD_LEFT || k == KeyEvent.KEYCODE_DPAD_RIGHT) &&
+            keyAction(k).let { it == KeyAction.ARCH_BACK || it == KeyAction.ARCH_FWD }) {
             val t = android.os.SystemClock.uptimeMillis()
             if (t - lastHoldSeek >= 250) {
                 lastHoldSeek = t
                 val hold = e.eventTime - e.downTime
                 val step = when { hold < 1500 -> 30000L; hold < 3500 -> 60000L; else -> 120000L }
-                seekArch(if (k == KeyEvent.KEYCODE_DPAD_LEFT) -step else step)
+                seekArch(if (keyAction(k) == KeyAction.ARCH_BACK) -step else step)
             }
         }
         return true
     }
 
     private var exitDlg: android.app.AlertDialog? = null
+    private var lastStepAt = 0L
 
     private fun confirmExit() {
         if (exitDlg?.isShowing == true) return
