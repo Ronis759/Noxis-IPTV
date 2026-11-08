@@ -929,7 +929,8 @@ class MainActivity : Activity() {
                 "кнопки пульта, история. Плейлист из файла и servers.txt не входят. В ссылках бывают логины и ключи — не публикуйте файл."
             textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(8), 0, dp(2))
         }
-        section("Резервная копия") { addView(btBackup); addView(btRestore); addView(tvBackupInfo) }
+        val btRestoreUrl = small(tvButton("⤒ Восстановить по ссылке…")).apply { setOnClickListener { importSettingsFromUrl() } }
+        section("Резервная копия") { addView(btBackup); addView(btRestore); addView(btRestoreUrl); addView(tvBackupInfo) }
         section("Система") { addView(btAbout) }
 
         val btClose = tvButton("Закрыть").apply { gravity = Gravity.CENTER; setOnClickListener { closeSetup() } }
@@ -1747,9 +1748,11 @@ class MainActivity : Activity() {
     /** Есть ли в системе приложение, умеющее выполнить [i]. Без проверки на боксах без окна выбора файлов система сама пишет «Действие не поддерживается». */
     private fun canHandle(i: Intent): Boolean = try { i.resolveActivity(packageManager) != null } catch (e: Exception) { false }
 
-    /** Сохранить настройки в файл: системный выбор места; на приставках без него — в папку приложения. */
+    private fun backupName() = "noxis-settings-" + SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date()) + ".json"
+
+    /** Сохранить настройки в файл: системный выбор места; на приставках без него — в «Загрузки» и в папку приложения. */
     private fun exportSettings() {
-        val name = "noxis-settings-" + SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date()) + ".json"
+        val name = backupName()
         try {
             val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
             i.addCategory(Intent.CATEGORY_OPENABLE)
@@ -1758,12 +1761,42 @@ class MainActivity : Activity() {
             if (!canHandle(i)) throw IOException("нет окна выбора файлов")
             startActivityForResult(i, RC_EXPORT)
         } catch (e: Exception) {
-            Thread { writeBackup(null) }.start()
+            Thread { writeBackup(null, name) }.start()
         }
     }
 
-    /** Записывает настройки в [u] (выбранный файл) или, если [u] == null, в папку приложения. Вызывать из фонового потока. */
-    private fun writeBackup(u: Uri?) {
+    /** Кладёт копию в общую папку «Загрузки» (Android 10+, разрешения не нужны). false — не вышло или система старше. */
+    private fun saveToDownloads(bytes: ByteArray, name: String): Boolean {
+        if (android.os.Build.VERSION.SDK_INT < 29) return false
+        return try {
+            val cv = android.content.ContentValues()
+            cv.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+            cv.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/json")
+            cv.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
+            val uri = contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv) ?: return false
+            (contentResolver.openOutputStream(uri) ?: return false).use { it.write(bytes) }
+            true
+        } catch (e: Exception) { false }
+    }
+
+    /** Последняя копия, которую это приложение само положило в «Загрузки» (чужие файлы без разрешения не видны). */
+    private fun findDownloadsBackup(): Uri? {
+        if (android.os.Build.VERSION.SDK_INT < 29) return null
+        return try {
+            val col = android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
+            contentResolver.query(col, arrayOf(android.provider.MediaStore.MediaColumns._ID),
+                android.provider.MediaStore.MediaColumns.DISPLAY_NAME + " LIKE ?", arrayOf("noxis-settings%"),
+                android.provider.MediaStore.MediaColumns.DATE_ADDED + " DESC")?.use { c ->
+                if (c.moveToFirst()) android.content.ContentUris.withAppendedId(col, c.getLong(0)) else null
+            }
+        } catch (e: Exception) { null }
+    }
+
+    /**
+     * Записывает настройки в [u] (выбранный файл) или, если [u] == null (нет окна выбора файлов), в папку приложения
+     * и дополнительно в «Загрузки». Вызывать из фонового потока.
+     */
+    private fun writeBackup(u: Uri?, name: String) {
         try {
             val bytes = SettingsBackup.export(prefs.all, appVersion(), SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date()))
                 .toByteArray(Charsets.UTF_8)
@@ -1772,9 +1805,17 @@ class MainActivity : Activity() {
                 (contentResolver.openOutputStream(u, "wt") ?: throw IOException("нет доступа к файлу")).use { it.write(bytes) }
                 msg = "Настройки сохранены в файл"
             } else {
-                val f = File(getExternalFilesDir(null) ?: throw IOException("нет папки приложения"), SettingsBackup.FILE_NAME)
-                f.writeBytes(bytes)
-                msg = "Настройки сохранены: " + f.absolutePath
+                var inApp: File? = null
+                try {
+                    inApp = File(getExternalFilesDir(null) ?: throw IOException("нет папки приложения"), SettingsBackup.FILE_NAME)
+                    inApp.writeBytes(bytes)
+                } catch (e: Exception) { inApp = null }
+                val inDownloads = saveToDownloads(bytes, name)
+                msg = when {
+                    inDownloads -> "Настройки сохранены в папку «Загрузки»: $name"
+                    inApp != null -> "Настройки сохранены: " + inApp.absolutePath
+                    else -> throw IOException("некуда сохранить")
+                }
             }
             runOnUiThread { toast(msg) }
         } catch (e: Exception) {
@@ -1782,7 +1823,7 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Восстановить настройки из файла: системный выбор файла; на приставках без него — файл из папки приложения. */
+    /** Восстановить настройки из файла: системный выбор файла; на приставках без него — копия из папки приложения или «Загрузок». */
     private fun importSettings() {
         try {
             val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
@@ -1791,27 +1832,63 @@ class MainActivity : Activity() {
             if (!canHandle(i)) throw IOException("нет окна выбора файлов")
             startActivityForResult(i, RC_IMPORT)
         } catch (e: Exception) {
-            val dir = getExternalFilesDir(null)
-            val f = dir?.let { File(it, SettingsBackup.FILE_NAME) }
-            if (f != null && f.exists()) Thread { readBackup(null, f) }.start()
-            else toast("Нет выбора файлов. Положите " + SettingsBackup.FILE_NAME + " в " + dir?.absolutePath)
+            Thread {
+                val dir = getExternalFilesDir(null)
+                val f = dir?.let { File(it, SettingsBackup.FILE_NAME) }
+                val d = findDownloadsBackup()
+                when {
+                    f != null && f.exists() -> readBackup(null, f)
+                    d != null -> readBackup(d, null)
+                    else -> runOnUiThread {
+                        toast("Нет выбора файлов. Положите " + SettingsBackup.FILE_NAME + " в " + dir?.absolutePath + " или восстановите по ссылке")
+                    }
+                }
+            }.start()
         }
     }
 
-    /** Читает и проверяет файл настроек, затем спрашивает подтверждение. Вызывать из фонового потока. */
-    private fun readBackup(u: Uri?, f: File?) {
+    /** Общая часть чтения: получает байты, проверяет файл настроек и спрашивает подтверждение. Вызывать из фонового потока. */
+    private fun runBackupRead(failMsg: String, load: () -> ByteArray) {
         try {
-            val ins = (if (u != null) contentResolver.openInputStream(u) else f?.inputStream()) ?: throw IOException("нет доступа к файлу")
-            val bytes = ins.use { Iptv.readLimited(it, SettingsBackup.MAX_BYTES) }
-            val m = SettingsBackup.parse(Iptv.text(bytes))
+            val m = SettingsBackup.parse(Iptv.text(load()))
             runOnUiThread { confirmRestore(m) }
         } catch (e: SettingsBackup.BadBackup) {
             runOnUiThread { toast(e.message ?: "Это не файл настроек") }
         } catch (e: TooBigException) {
             runOnUiThread { toast("Файл слишком большой для файла настроек") }
         } catch (e: Exception) {
-            runOnUiThread { toast("Не удалось прочитать файл") }
+            runOnUiThread { toast(failMsg) }
         }
+    }
+
+    private fun readBackup(u: Uri?, f: File?) = runBackupRead("Не удалось прочитать файл") {
+        val ins = (if (u != null) contentResolver.openInputStream(u) else f?.inputStream()) ?: throw IOException("нет доступа к файлу")
+        ins.use { Iptv.readLimited(it, SettingsBackup.MAX_BYTES) }
+    }
+
+    /** Восстановить настройки по ссылке (прямая ссылка на файл настроек, например raw-ссылка GitHub). */
+    private fun importSettingsFromUrl() {
+        val et = EditText(this).apply {
+            hint = "https://…/noxis-settings.json"
+            setSingleLine()
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+        }
+        val pad = dp(20)
+        val box = FrameLayout(this).apply { setPadding(pad, dp(8), pad, 0); addView(et, FrameLayout.LayoutParams(-1, -2)) }
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Восстановить по ссылке")
+            .setMessage("Прямая ссылка на файл настроек (http или https).")
+            .setView(box)
+            .setPositiveButton("Скачать") { _, _ ->
+                val url = et.text.toString().trim()
+                if (!url.startsWith("http://", true) && !url.startsWith("https://", true)) toast("Ссылка должна начинаться с http:// или https://")
+                else {
+                    toast("Загрузка…")
+                    Thread { runBackupRead("Не удалось скачать файл") { Iptv.http(url, false, SettingsBackup.MAX_BYTES) } }.start()
+                }
+            }
+            .setNegativeButton("Отмена", null)
+            .show()
     }
 
     private fun confirmRestore(m: Map<String, Any>) {
