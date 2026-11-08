@@ -84,6 +84,10 @@ class MainActivity : Activity() {
     private lateinit var btServer: Button
     private lateinit var btAdv: Button
     private lateinit var advBox: LinearLayout
+    // раскрывающиеся разделы настроек: заголовок-кнопка и тело раздела
+    private val secTitles = ArrayList<String>()
+    private val secHeads = ArrayList<Button>()
+    private val secBodies = ArrayList<LinearLayout>()
     private var srvBackToSetup = false   // панель серверов открыта из настроек (Назад вернёт туда)
     private lateinit var hudLogo: ImageView
     private lateinit var seekBox: LinearLayout
@@ -665,7 +669,6 @@ class MainActivity : Activity() {
     }
 
     private fun buildSetup() {
-        val accent = Theme.accent
         val gray = Theme.gray
         fun field(h: String) = EditText(this).apply {
             setTextColor(Color.WHITE); setHintTextColor(0xFF667780.toInt()); hint = h; textSize = 15f
@@ -682,13 +685,29 @@ class MainActivity : Activity() {
             setPadding(dp(14), dp(4), dp(14), dp(4))
             (layoutParams as LinearLayout.LayoutParams).topMargin = dp(6)
         }
-        fun card(title: String) = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = cardBg()
-            setPadding(dp(16), dp(12), dp(16), dp(14))
-            addView(TextView(this@MainActivity).apply {
-                text = title.uppercase(); textSize = 13f; letterSpacing = 0.12f; setTextColor(accent)
-            })
+        // раскрывающийся раздел: заголовок-кнопка (OK или ►/◄) и скрытое по умолчанию тело
+        val sectionsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        fun section(title: String, build: LinearLayout.() -> Unit) {
+            val i = secTitles.size
+            val body = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = cardBg()
+                setPadding(dp(16), dp(8), dp(16), dp(14))
+                visibility = View.GONE
+                build()
+            }
+            val head = tvButton("▸  $title").apply {
+                setOnClickListener { showSection(i, secBodies[i].visibility != View.VISIBLE) }
+                setOnKeyListener { _, k, e ->
+                    if (e.action == KeyEvent.ACTION_DOWN && (k == KeyEvent.KEYCODE_DPAD_RIGHT || k == KeyEvent.KEYCODE_DPAD_LEFT)) {
+                        showSection(i, k == KeyEvent.KEYCODE_DPAD_RIGHT)
+                        true
+                    } else false
+                }
+            }
+            secTitles.add(title); secHeads.add(head); secBodies.add(body)
+            sectionsBox.addView(head, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(if (i == 0) 0 else 8) })
+            sectionsBox.addView(body, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4) })
         }
         // несколько кнопок в одну строку
         fun row(vararg bs: Button) = LinearLayout(this).apply {
@@ -797,7 +816,7 @@ class MainActivity : Activity() {
             addView(dimOverlay, FrameLayout.LayoutParams(-1, -1).apply { leftMargin = dp(70) })
         }
 
-        // ----- Система -----
+        // ----- Обновление и система -----
         tvStat = TextView(this).apply { textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(10), 0, 0) }
         val btEpg = small(tvButton("Обновить программу передач")).apply {
             setOnClickListener {
@@ -814,34 +833,6 @@ class MainActivity : Activity() {
         btUpd = small(tvButton("Проверить обновления")).apply { setOnClickListener { updates.check(true) } }
         val btAbout = small(tvButton("О программе")).apply { setOnClickListener { showAbout() } }
 
-        val srcCard = card("Источник").apply {
-            addView(label("Текущий сервер")); addView(tvSrv)
-            addView(row(btServer, btFile))
-            addView(btReload)
-            addView(btAdv); addView(advBox)
-        }
-        val playCard = card("Воспроизведение").apply { addView(btType); addView(btSound); addView(btFindCh) }
-        val lookCard = card("Оформление").apply {
-            addView(btTheme); addView(btFont); addView(btDim)
-            addView(dimPreview, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(6) })
-        }
-        val listCard = card("Список каналов").apply { addView(btSort); addView(btStart) }
-        val sysCard = card("Система").apply { addView(btEpg); addView(btUpd); addView(btAbout); addView(tvStat) }
-
-        val colL = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(srcCard); addView(playCard, gap())
-        }
-        val colR = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(lookCard); addView(listCard, gap()); addView(sysCard, gap())
-        }
-        val cols = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            addView(colL, LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(8) })
-            addView(colR, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(8) })
-        }
-
         // ----- Группы каналов: нажатие — показать / скрыть -----
         groupsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         tvGroupsInfo = TextView(this).apply { textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(8), 0, dp(2)) }
@@ -853,9 +844,21 @@ class MainActivity : Activity() {
                 renderGroupsCard(if (groups.isEmpty()) -1 else 0)
             }
         }
-        val groupsCard = card("Группы каналов").apply {
-            addView(tvGroupsInfo); addView(btShowAllGroups); addView(groupsBox)
+        // ----- Раскрывающиеся вкладки (порядок на экране) -----
+        section("Источник") {
+            addView(label("Текущий сервер")); addView(tvSrv)
+            addView(row(btServer, btFile))
+            addView(btAdv); addView(advBox)
         }
+        section("Обновление") { addView(btReload); addView(btEpg); addView(btUpd); addView(tvStat) }
+        section("Воспроизведение") { addView(btType); addView(btSound); addView(btFindCh) }
+        section("Оформление") {
+            addView(btTheme); addView(btFont); addView(btDim)
+            addView(dimPreview, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(6) })
+        }
+        section("Список каналов") { addView(btSort); addView(btStart) }
+        section("Группы каналов") { addView(tvGroupsInfo); addView(btShowAllGroups); addView(groupsBox) }
+        section("Система") { addView(btAbout) }
 
         val btClose = tvButton("Закрыть").apply { gravity = Gravity.CENTER; setOnClickListener { closeSetup() } }
 
@@ -875,8 +878,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(32), dp(16), dp(32), dp(16))
             addView(header)
-            addView(cols, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
-            addView(groupsCard, gap())
+            addView(sectionsBox, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
             addView(btClose, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
         }
         setup = ScrollView(this).apply { setBackgroundColor(Theme.deep); visibility = View.GONE; addView(col) }
@@ -1117,6 +1119,23 @@ class MainActivity : Activity() {
         btAdv.text = if (on) "Дополнительно  ▴" else "Дополнительно  ▾"
     }
 
+    /** Раскрывает раздел настроек [i] (остальные сворачиваются) или сворачивает все, если [open] = false. */
+    private fun showSection(i: Int, open: Boolean) {
+        for (k in secBodies.indices) {
+            val on = open && k == i
+            secBodies[k].visibility = if (on) View.VISIBLE else View.GONE
+            secHeads[k].text = (if (on) "▾  " else "▸  ") + secTitles[k]
+        }
+        if (open && i in secHeads.indices) setup.post {
+            // заголовок раскрытого раздела поднимаем к верху экрана
+            var y = 0
+            var v: View = secHeads[i]
+            val inner = setup.getChildAt(0)
+            while (v !== inner && v.parent is View) { y += v.top; v = v.parent as View }
+            setup.smoothScrollTo(0, (y - dp(12)).coerceAtLeast(0))
+        }
+    }
+
     private fun openSetup() {
         val pl = (prefs.getString("pl", "") ?: "").ifEmpty { getString(R.string.default_playlist) }
         etPl.setText(pl)
@@ -1132,11 +1151,12 @@ class MainActivity : Activity() {
         btTheme.text = themeLabel()
         tvStat.text = "Программа передач: $epgStatus"
         setAdvanced(pl.isEmpty())   // если плейлиста нет, сразу показываем поля для ручного ввода
+        showSection(0, pl.isEmpty())   // нет плейлиста — раскрыт «Источник», иначе все вкладки свёрнуты
         renderGroupsCard()
         refreshUpdateUi()
         showPanel(setup)
         setup.scrollTo(0, 0)
-        btServer.requestFocus()
+        if (pl.isEmpty()) btServer.requestFocus() else secHeads[0].requestFocus()
     }
 
     /** Сохраняет поля настроек (без перезагрузки плейлиста). */
