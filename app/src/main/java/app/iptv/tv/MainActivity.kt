@@ -57,6 +57,7 @@ import java.util.Locale
 /** Коды запросов выбора файла: 7 — servers.txt / плейлист, 8 — сохранить настройки, 9 — восстановить настройки. */
 private const val RC_EXPORT = 8
 private const val RC_IMPORT = 9
+private const val RC_PERM = 10
 
 class MainActivity : Activity() {
     private lateinit var player: ExoPlayer
@@ -137,6 +138,7 @@ class MainActivity : Activity() {
         set(v) { field = v; Session.epgStatus = v; refreshTitle() }
     @Volatile private var loadGen = 0      // номер текущей загрузки плейлиста: устаревшие потоки ничего не публикуют
     private var started = false            // между onStart и onStop
+    private var askedStorage = false      // разрешение на запись в «Загрузки» (Android 6–9) уже запрашивали
     private var restoring = false          // настройки восстановлены из файла: onStop не должен затирать их своими данными
     @Volatile private var plEpgUrl = ""   // адрес программы из заголовка плейлиста (url-tvg)
 
@@ -922,7 +924,8 @@ class MainActivity : Activity() {
             addView(btKeyReset)
         }
         // ----- Резервная копия: настройки в файл и обратно -----
-        val btBackup = small(tvButton("⤓ Сохранить настройки в файл…")).apply { setOnClickListener { exportSettings() } }
+        val btBackup = small(tvButton("⤓ Сохранить настройки в файл")).apply { setOnClickListener { exportSettings() } }
+        val btBackupAs = small(tvButton("⤓ Сохранить как…")).apply { setOnClickListener { exportSettingsAs() } }
         val btRestore = small(tvButton("⤒ Восстановить настройки из файла…")).apply { setOnClickListener { importSettings() } }
         val tvBackupInfo = TextView(this).apply {
             text = "В файл попадают применённые настройки: сервер и ссылки, оформление, порядок каналов, избранное, скрытые группы, " +
@@ -930,7 +933,7 @@ class MainActivity : Activity() {
             textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(8), 0, dp(2))
         }
         val btRestoreUrl = small(tvButton("⤒ Восстановить по ссылке…")).apply { setOnClickListener { importSettingsFromUrl() } }
-        section("Резервная копия") { addView(btBackup); addView(btRestore); addView(btRestoreUrl); addView(tvBackupInfo) }
+        section("Резервная копия") { addView(btBackup); addView(btBackupAs); addView(btRestore); addView(btRestoreUrl); addView(tvBackupInfo) }
         section("Система") { addView(btAbout) }
 
         val btClose = tvButton("Закрыть").apply { gravity = Gravity.CENTER; setOnClickListener { closeSetup() } }
@@ -1750,8 +1753,34 @@ class MainActivity : Activity() {
 
     private fun backupName() = "noxis-settings-" + SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date()) + ".json"
 
-    /** Сохранить настройки в файл: системный выбор места; на приставках без него — в «Загрузки» и в папку приложения. */
+    private fun hasStoragePerm(): Boolean =
+        android.os.Build.VERSION.SDK_INT >= 29 || android.os.Build.VERSION.SDK_INT < 23 ||
+            checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    /** Сохранить настройки сразу, без окна выбора файлов: в «Загрузки» и в папку приложения. На Android 6–9 один раз спросит разрешение. */
     private fun exportSettings() {
+        if (!hasStoragePerm() && !askedStorage) {
+            askedStorage = true
+            requestPermissions(arrayOf(android.Manifest.permission.WRITE_EXTERNAL_STORAGE), RC_PERM)
+            return
+        }
+        Thread { writeBackup(null, backupName()) }.start()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == RC_PERM) exportSettings()   // разрешили или нет — сохраняем: без разрешения копия попадёт в папку приложения
+    }
+
+    /** Показывает результат окном: путь к файлу должен быть виден, пока его не прочитают. Вызывать из потока интерфейса. */
+    private fun showInfo(title: String, msg: String) {
+        if (isFinishing || isDestroyed) return
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle(title).setMessage(msg).setPositiveButton("OK", null).show()
+    }
+
+    /** «Сохранить как…»: системное окно выбора места и имени файла. */
+    private fun exportSettingsAs() {
         val name = backupName()
         try {
             val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
@@ -1761,13 +1790,23 @@ class MainActivity : Activity() {
             if (!canHandle(i)) throw IOException("нет окна выбора файлов")
             startActivityForResult(i, RC_EXPORT)
         } catch (e: Exception) {
-            Thread { writeBackup(null, name) }.start()
+            toast("Нет окна выбора файлов — сохраняю в «Загрузки» и в папку приложения")
+            exportSettings()
         }
     }
 
     /** Кладёт копию в общую папку «Загрузки» (Android 10+, разрешения не нужны). false — не вышло или система старше. */
     private fun saveToDownloads(bytes: ByteArray, name: String): Boolean {
-        if (android.os.Build.VERSION.SDK_INT < 29) return false
+        if (android.os.Build.VERSION.SDK_INT < 29) {
+            if (!hasStoragePerm()) return false
+            return try {
+                @Suppress("DEPRECATION")
+                val dir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                dir.mkdirs()
+                File(dir, name).writeBytes(bytes)
+                true
+            } catch (e: Exception) { false }
+        }
         return try {
             val cv = android.content.ContentValues()
             cv.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
@@ -1792,6 +1831,16 @@ class MainActivity : Activity() {
         } catch (e: Exception) { null }
     }
 
+    /** Копия в общей папке «Загрузки» на Android 6–9 (нужно разрешение на запись; на 10+ используется [findDownloadsBackup]). */
+    private fun findLegacyBackup(): File? {
+        if (android.os.Build.VERSION.SDK_INT >= 29 || !hasStoragePerm()) return null
+        return try {
+            @Suppress("DEPRECATION")
+            val dir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+            dir.listFiles { x -> x.name.startsWith("noxis-settings") && x.name.endsWith(".json") }?.maxByOrNull { it.lastModified() }
+        } catch (e: Exception) { null }
+    }
+
     /**
      * Записывает настройки в [u] (выбранный файл) или, если [u] == null (нет окна выбора файлов), в папку приложения
      * и дополнительно в «Загрузки». Вызывать из фонового потока.
@@ -1800,26 +1849,27 @@ class MainActivity : Activity() {
         try {
             val bytes = SettingsBackup.export(prefs.all, appVersion(), SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date()))
                 .toByteArray(Charsets.UTF_8)
-            val msg: String
             if (u != null) {
                 (contentResolver.openOutputStream(u, "wt") ?: throw IOException("нет доступа к файлу")).use { it.write(bytes) }
-                msg = "Настройки сохранены в файл"
-            } else {
-                var inApp: File? = null
-                try {
-                    inApp = File(getExternalFilesDir(null) ?: throw IOException("нет папки приложения"), SettingsBackup.FILE_NAME)
-                    inApp.writeBytes(bytes)
-                } catch (e: Exception) { inApp = null }
-                val inDownloads = saveToDownloads(bytes, name)
-                msg = when {
-                    inDownloads -> "Настройки сохранены в папку «Загрузки»: $name"
-                    inApp != null -> "Настройки сохранены: " + inApp.absolutePath
-                    else -> throw IOException("некуда сохранить")
-                }
+                runOnUiThread { toast("Настройки сохранены в файл") }
+                return
             }
-            runOnUiThread { toast(msg) }
+            val lines = ArrayList<String>()
+            var err = ""
+            try {
+                val dir = getExternalFilesDir(null) ?: throw IOException("нет папки приложения")
+                val f = File(dir, SettingsBackup.FILE_NAME)
+                f.writeBytes(bytes)
+                lines.add("Папка приложения:\n" + f.absolutePath)
+            } catch (e: Exception) { err = e.javaClass.simpleName + ": " + e.message }
+            if (saveToDownloads(bytes, name)) lines.add(0, "Папка «Загрузки»:\n$name")
+            runOnUiThread {
+                if (lines.isEmpty()) showInfo("Не удалось сохранить", err.ifEmpty { "некуда записать файл" })
+                else showInfo("Настройки сохранены", lines.joinToString("\n\n"))
+            }
         } catch (e: Exception) {
-            runOnUiThread { toast("Не удалось сохранить настройки") }
+            val why = e.javaClass.simpleName + ": " + e.message
+            runOnUiThread { showInfo("Не удалось сохранить", why) }
         }
     }
 
@@ -1836,9 +1886,11 @@ class MainActivity : Activity() {
                 val dir = getExternalFilesDir(null)
                 val f = dir?.let { File(it, SettingsBackup.FILE_NAME) }
                 val d = findDownloadsBackup()
+                val lg = findLegacyBackup()
                 when {
                     f != null && f.exists() -> readBackup(null, f)
                     d != null -> readBackup(d, null)
+                    lg != null -> readBackup(null, lg)
                     else -> runOnUiThread {
                         toast("Нет выбора файлов. Положите " + SettingsBackup.FILE_NAME + " в " + dir?.absolutePath + " или восстановите по ссылке")
                     }
