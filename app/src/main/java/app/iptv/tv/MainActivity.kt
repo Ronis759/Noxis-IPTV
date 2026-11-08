@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
+import android.net.Uri
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
@@ -46,11 +47,16 @@ import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+
+/** Коды запросов выбора файла: 7 — servers.txt / плейлист, 8 — сохранить настройки, 9 — восстановить настройки. */
+private const val RC_EXPORT = 8
+private const val RC_IMPORT = 9
 
 class MainActivity : Activity() {
     private lateinit var player: ExoPlayer
@@ -131,6 +137,7 @@ class MainActivity : Activity() {
         set(v) { field = v; Session.epgStatus = v; refreshTitle() }
     @Volatile private var loadGen = 0      // номер текущей загрузки плейлиста: устаревшие потоки ничего не публикуют
     private var started = false            // между onStart и onStop
+    private var restoring = false          // настройки восстановлены из файла: onStop не должен затирать их своими данными
     @Volatile private var plEpgUrl = ""   // адрес программы из заголовка плейлиста (url-tvg)
 
     private val ui = Handler(Looper.getMainLooper())
@@ -914,6 +921,15 @@ class MainActivity : Activity() {
             for (b in keyBtns) addView(b)
             addView(btKeyReset)
         }
+        // ----- Резервная копия: настройки в файл и обратно -----
+        val btBackup = small(tvButton("⤓ Сохранить настройки в файл…")).apply { setOnClickListener { exportSettings() } }
+        val btRestore = small(tvButton("⤒ Восстановить настройки из файла…")).apply { setOnClickListener { importSettings() } }
+        val tvBackupInfo = TextView(this).apply {
+            text = "В файл попадают применённые настройки: сервер и ссылки, оформление, порядок каналов, избранное, скрытые группы, " +
+                "кнопки пульта, история. Плейлист из файла и servers.txt не входят. В ссылках бывают логины и ключи — не публикуйте файл."
+            textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(8), 0, dp(2))
+        }
+        section("Резервная копия") { addView(btBackup); addView(btRestore); addView(tvBackupInfo) }
         section("Система") { addView(btAbout) }
 
         val btClose = tvButton("Закрыть").apply { gravity = Gravity.CENTER; setOnClickListener { closeSetup() } }
@@ -1553,6 +1569,7 @@ class MainActivity : Activity() {
 
     /** Запоминает, на каком месте остановились в архивной передаче (не больше 20 передач). Начало и конец (≈1 мин) не запоминаются. */
     private fun saveArcPos() {
+        if (restoring) return
         val a = arch ?: return
         val c = arcOwner ?: return
         if (readyMode == null) return
@@ -1723,10 +1740,109 @@ class MainActivity : Activity() {
         }
     }
 
+    /* ---------- резервная копия настроек ---------- */
+    private fun appVersion(): String = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "?" } catch (e: Exception) { "?" }
+
+    /** Сохранить настройки в файл: системный выбор места; на приставках без него — в папку приложения. */
+    private fun exportSettings() {
+        val name = "noxis-settings-" + SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date()) + ".json"
+        try {
+            val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
+            i.addCategory(Intent.CATEGORY_OPENABLE)
+            i.type = "application/json"
+            i.putExtra(Intent.EXTRA_TITLE, name)
+            startActivityForResult(i, RC_EXPORT)
+        } catch (e: Exception) {
+            Thread { writeBackup(null) }.start()
+        }
+    }
+
+    /** Записывает настройки в [u] (выбранный файл) или, если [u] == null, в папку приложения. Вызывать из фонового потока. */
+    private fun writeBackup(u: Uri?) {
+        try {
+            val bytes = SettingsBackup.export(prefs.all, appVersion(), SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date()))
+                .toByteArray(Charsets.UTF_8)
+            val msg: String
+            if (u != null) {
+                (contentResolver.openOutputStream(u, "wt") ?: throw IOException("нет доступа к файлу")).use { it.write(bytes) }
+                msg = "Настройки сохранены в файл"
+            } else {
+                val f = File(getExternalFilesDir(null) ?: throw IOException("нет папки приложения"), SettingsBackup.FILE_NAME)
+                f.writeBytes(bytes)
+                msg = "Настройки сохранены: " + f.absolutePath
+            }
+            runOnUiThread { toast(msg) }
+        } catch (e: Exception) {
+            runOnUiThread { toast("Не удалось сохранить настройки") }
+        }
+    }
+
+    /** Восстановить настройки из файла: системный выбор файла; на приставках без него — файл из папки приложения. */
+    private fun importSettings() {
+        try {
+            val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            i.addCategory(Intent.CATEGORY_OPENABLE)
+            i.type = "*/*"
+            startActivityForResult(i, RC_IMPORT)
+        } catch (e: Exception) {
+            val dir = getExternalFilesDir(null)
+            val f = dir?.let { File(it, SettingsBackup.FILE_NAME) }
+            if (f != null && f.exists()) Thread { readBackup(null, f) }.start()
+            else toast("Нет выбора файлов. Положите " + SettingsBackup.FILE_NAME + " в " + dir?.absolutePath)
+        }
+    }
+
+    /** Читает и проверяет файл настроек, затем спрашивает подтверждение. Вызывать из фонового потока. */
+    private fun readBackup(u: Uri?, f: File?) {
+        try {
+            val ins = (if (u != null) contentResolver.openInputStream(u) else f?.inputStream()) ?: throw IOException("нет доступа к файлу")
+            val bytes = ins.use { Iptv.readLimited(it, SettingsBackup.MAX_BYTES) }
+            val m = SettingsBackup.parse(Iptv.text(bytes))
+            runOnUiThread { confirmRestore(m) }
+        } catch (e: SettingsBackup.BadBackup) {
+            runOnUiThread { toast(e.message ?: "Это не файл настроек") }
+        } catch (e: TooBigException) {
+            runOnUiThread { toast("Файл слишком большой для файла настроек") }
+        } catch (e: Exception) {
+            runOnUiThread { toast("Не удалось прочитать файл") }
+        }
+    }
+
+    private fun confirmRestore(m: Map<String, Any>) {
+        if (isFinishing || isDestroyed) return
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Восстановить настройки?")
+            .setMessage("Параметров в файле: ${m.size}. Текущие настройки (сервер, оформление, избранное, кнопки пульта…) будут заменены, экран перезапустится.")
+            .setPositiveButton("Восстановить") { _, _ -> applyRestore(m) }
+            .setNegativeButton("Отмена", null)
+            .show()
+    }
+
+    /** Заменяет все настройки из резервной копии значениями из файла и перезапускает экран: он заново читает всё из настроек. */
+    private fun applyRestore(m: Map<String, Any>) {
+        val vals = LinkedHashMap(m)
+        // локальный плейлист в копию не входит: без файла ссылка «local» бесполезна
+        if (vals["pl"] == "local" && !File(filesDir, "local.m3u").exists()) { vals.remove("pl"); vals.remove("srvn") }
+        restoring = true   // onStop старого экрана не должен записать поверх восстановленного свои данные
+        val ed = prefs.edit()
+        for (k in prefs.all.keys) if (SettingsBackup.isBackupKey(k)) ed.remove(k)
+        for ((k, v) in vals) when (v) {
+            is String -> ed.putString(k, v)
+            is Int -> ed.putInt(k, v)
+            is Set<*> -> ed.putStringSet(k, v.filterIsInstance<String>().toSet())
+        }
+        ed.putBoolean("reopen", true)
+        ed.commit()
+        Session.clear()   // плейлист другого сервера: заново загрузить
+        recreate()
+    }
+
     @Suppress("DEPRECATION")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         val u = data?.data
+        if (requestCode == RC_EXPORT && resultCode == RESULT_OK && u != null) { Thread { writeBackup(u) }.start(); return }
+        if (requestCode == RC_IMPORT && resultCode == RESULT_OK && u != null) { Thread { readBackup(u, null) }.start(); return }
         if (requestCode == 7 && resultCode == RESULT_OK && u != null) {
             Thread {
                 try {

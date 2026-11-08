@@ -10,3 +10,6 @@ servers.txt
 *.keystore
 *.jks
 *.p12
+
+# резервные копии настроек (в ссылках бывают логины и ключи)
+noxis-settings*.json
