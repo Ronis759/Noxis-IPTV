@@ -203,6 +203,11 @@ class MainActivity : Activity() {
     private val showBuf = Runnable { bufView.visibility = View.VISIBLE }
     private val hideToast = Runnable { toastTv.visibility = View.GONE }
 
+    // Таймер сна
+    private lateinit var sleepTimer: SleepTimer
+    private lateinit var btSleepTimer: Button
+    private var sleepTimerWarningShown = false
+
     private fun dp(x: Int) = (x * resources.displayMetrics.density).toInt()
     private fun now() = System.currentTimeMillis() / 1000
     private fun hm(t: Long) = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(t * 1000))
@@ -326,6 +331,40 @@ class MainActivity : Activity() {
         updates = UpdateFlow(this, prefs, { toast(it) }) { runOnUiThread { refreshRail(); refreshUpdateUi() } }
         favs = PrefSet(prefs.getStringSet("fav", emptySet()) ?: emptySet()) { prefs.edit().putStringSet("fav", HashSet(it)).apply() }
         hiddenGroups = PrefSet(prefs.getStringSet("hg", emptySet()) ?: emptySet()) { prefs.edit().putStringSet("hg", HashSet(it)).apply() }
+
+        // Инициализация таймера сна
+        sleepTimer = SleepTimer(
+            onWarning = { remaining ->
+                if (!sleepTimerWarningShown) {
+                    sleepTimerWarningShown = true
+                    toast(L.t("Таймер сна: ") + L.t("осталось ") + SleepTimer.formatRemaining(remaining))
+                }
+            },
+            onExpire = {
+                // Плавное затухание громкости перед остановкой
+                val startVolume = player.volume
+                val fadeSteps = 20
+                val fadeDelay = 100L
+                var step = 0
+                val fadeRunnable = object : Runnable {
+                    override fun run() {
+                        if (step < fadeSteps) {
+                            val volume = startVolume * (1 - step.toFloat() / fadeSteps)
+                            player.volume = volume
+                            step++
+                            ui.postDelayed(this, fadeDelay)
+                        } else {
+                            player.pause()
+                            player.volume = startVolume
+                            toast(L.t("Таймер сна: воспроизведение остановлено"))
+                            sleepTimerWarningShown = false
+                        }
+                    }
+                }
+                ui.post(fadeRunnable)
+            }
+        )
+
         buildHud(); buildSeek(); buildPanels(); buildSetup(); buildServers(); buildToast(); applyFont()
         // тип архива по умолчанию — flussonic (один раз переводим и ранее сохранённое значение по умолчанию)
         if (prefs.getInt("ctv", 0) < 1) prefs.edit().putString("ct", "flussonic").putInt("ctv", 1).apply()
@@ -853,6 +892,7 @@ class MainActivity : Activity() {
         }
         val btSound = small(tvButton(L.t("♫ Звук, субтитры, формат"))).apply { setOnClickListener { openPlayerOptions() } }
         val btFindCh = small(tvButton(L.t("⌕ Поиск канала…"))).apply { setOnClickListener { openSearch() } }
+        btSleepTimer = small(tvButton(sleepTimerLabel())).apply { setOnClickListener { showSleepTimerDialog() } }
         btZap = small(tvButton("")).apply {
             setOnClickListener { prefs.edit().putString("zapm", if (zapByList()) "all" else "list").apply(); text = zapLabel() }
         }
@@ -944,7 +984,7 @@ class MainActivity : Activity() {
             addView(btAdv); addView(advBox)
         }
         section(L.t("Обновление")) { addView(btReload); addView(btEpg); addView(btUpd); addView(tvUpdStat); addView(tvStat) }
-        section(L.t("Воспроизведение")) { addView(btType); addView(btZap); addView(btSound); addView(btFindCh) }
+        section(L.t("Воспроизведение")) { addView(btType); addView(btZap); addView(btSound); addView(btFindCh); addView(btSleepTimer) }
         section(L.t("Оформление")) {
             addView(btLang); addView(btTheme); addView(btFont); addView(btDim)
             addView(dimPreview, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(6) })
@@ -2422,9 +2462,104 @@ class MainActivity : Activity() {
         }
     }
     override fun onDestroy() {
+        sleepTimer.cancel()
         super.onDestroy()
         ui.removeCallbacksAndMessages(null)
         Iptv.onUa = null
         player.release()
+    }
+
+    /* ---------- Таймер сна ---------- */
+
+    /** Метка кнопки таймера сна. */
+    private fun sleepTimerLabel(): String = if (sleepTimer.isActive()) {
+        L.t("⏲ Таймер сна: ") + SleepTimer.formatRemaining(sleepTimer.remaining())
+    } else {
+        L.t("⏲ Таймер сна")
+    }
+
+    /** Открыть диалог выбора времени для таймера сна. */
+    private fun showSleepTimerDialog() {
+        val dialog = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(16), dp(24), dp(16))
+            setBackgroundColor(Theme.deep)
+        }
+
+        val title = TextView(this).apply {
+            text = L.t("Установить таймер сна")
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+        }
+        dialog.addView(title, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(16) })
+
+        val subtitle = TextView(this).apply {
+            text = L.t("Выключить через:")
+            textSize = 15f
+            setTextColor(Theme.gray)
+            gravity = Gravity.CENTER
+        }
+        dialog.addView(subtitle, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+
+        // Кнопки для каждого интервала
+        for (minutes in SleepTimer.INTERVALS) {
+            val btn = tvButton(SleepTimer.formatDuration(minutes)).apply {
+                gravity = Gravity.CENTER
+                setOnClickListener {
+                    sleepTimer.start(minutes) { ui.post { btSleepTimer.text = sleepTimerLabel() } }
+                    sleepTimerWarningShown = false
+                    toast(L.t("Таймер сна: ") + SleepTimer.formatDuration(minutes))
+                    closeDialog()
+                    btSleepTimer.text = sleepTimerLabel()
+                }
+            }
+            dialog.addView(btn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+        }
+
+        // Кнопка отмены таймера (если активен)
+        if (sleepTimer.isActive()) {
+            val btnCancel = tvButton(L.t("Отменить таймер")).apply {
+                gravity = Gravity.CENTER
+                setTextColor(ColorStateList(
+                    arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()),
+                    intArrayOf(Theme.onAccent, Theme.gray)
+                ))
+                setOnClickListener {
+                    sleepTimer.cancel()
+                    sleepTimerWarningShown = false
+                    toast(L.t("Таймер сна отменён"))
+                    closeDialog()
+                    btSleepTimer.text = sleepTimerLabel()
+                }
+            }
+            dialog.addView(btnCancel, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
+        }
+
+        val btnClose = tvButton(L.t("Закрыть")).apply {
+            gravity = Gravity.CENTER
+            setOnClickListener { closeDialog() }
+        }
+        dialog.addView(btnClose, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
+
+        // Отобразить диалог
+        val overlay = FrameLayout(this).apply {
+            setBackgroundColor(0xDD000000.toInt())
+            addView(dialog, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+            setOnClickListener { /* предотвратить закрытие по клику мимо */ }
+        }
+
+        root.addView(overlay, FrameLayout.LayoutParams(-1, -1))
+        // Найти первую кнопку и установить фокус
+        val firstBtn = dialog.getChildAt(2) // после title и subtitle
+        if (firstBtn is Button) firstBtn.requestFocus()
+    }
+
+    /** Закрыть диалог таймера сна. */
+    private fun closeDialog() {
+        val overlay = root.getChildAt(root.childCount - 1)
+        if (overlay is FrameLayout) {
+            root.removeView(overlay)
+        }
     }
 }
