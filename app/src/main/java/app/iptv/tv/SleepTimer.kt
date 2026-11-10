@@ -7,7 +7,7 @@ import android.os.Looper
  * Таймер сна: автоматическое выключение воспроизведения через заданное время.
  * Перед выключением плавно снижает громкость и показывает предупреждение.
  */
-class SleepTimer(private val onWarning: (Int) -> Unit, private val onExpire: () -> Unit) {
+class SleepTimer(private val onWarning: (Long) -> Unit, private val onExpire: () -> Unit) {
     private val handler = Handler(Looper.getMainLooper())
     private var mainRunnable: Runnable? = null
     private var warningRunnable: Runnable? = null
@@ -31,7 +31,7 @@ class SleepTimer(private val onWarning: (Int) -> Unit, private val onExpire: () 
             }
         }
 
-        /** Форматирование оставшегося времени: "осталось 5:23". */
+        /** Форматирование оставшегося времени в секундах: "5:23". */
         fun formatRemaining(seconds: Long): String {
             val m = seconds / 60
             val s = seconds % 60
@@ -60,7 +60,7 @@ class SleepTimer(private val onWarning: (Int) -> Unit, private val onExpire: () 
             warningRunnable = Runnable {
                 if (isActive) {
                     val remaining = (expiresAt - System.currentTimeMillis()) / 1000
-                    onWarning(remaining.toInt())
+                    onWarning(remaining)
                 }
             }
             handler.postDelayed(warningRunnable!!, warningDelay)
