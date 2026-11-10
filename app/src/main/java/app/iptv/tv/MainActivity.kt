@@ -505,7 +505,7 @@ class MainActivity : Activity() {
     private fun buildPanels() {
         grpList = lv(); chList = lv(); dayList = lv(); progList = lv()
         (chList.adapter as RowAdapter).icons = true
-        chTitle = TextView(this).apply { textSize = 20f; maxLines = 2; text = L.f("Каналы   ·   программа: {0}", L.t(epgStatus)) }
+        chTitle = TextView(this).apply { textSize = 20f; maxLines = 2; text = L.t("Все каналы") }
         buildChPanel()
         // шапка архива: «Архив:» · значок канала · название канала, ниже — тип архива и число дней
         arPrefix = TextView(this).apply { text = L.t("Архив:"); textSize = 24f; setTextColor(Theme.gray) }
@@ -655,14 +655,14 @@ class MainActivity : Activity() {
 
     private fun setRailHint(t: String?) { railHintText = t; refreshTitle() }
 
-    /** Заголовок списка каналов: название группы и состояние программы; у выбранного значка полосы — его название. */
+    /** Заголовок списка каналов: просто название группы; у выбранного значка полосы — его название. */
     /** Название группы для показа: служебные группы и «Без группы» переводятся, группы из плейлиста остаются как есть. */
     private fun groupName(g: String) = if (g == G_ALL || g == G_FAV || g == G_HIST || g == G_FIND || g == "Без группы") L.t(g) else g
 
     private fun refreshTitle() {
         if (!::chTitle.isInitialized) return
         val head = when (grp) { G_ALL -> L.t("Все каналы"); G_FIND -> L.f("Поиск «{0}»", query); else -> groupName(grp) }
-        chTitle.text = railHintText ?: L.f("{0}   ·   программа: {1}", head, L.t(epgStatus))
+        chTitle.text = railHintText ?: head
     }
 
     /** Обновляет вид значков: значок «Обновление» виден только при найденной новой версии, у выбранного режима — рамка. */
