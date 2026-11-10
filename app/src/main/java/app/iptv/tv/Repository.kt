@@ -63,53 +63,79 @@ class Repository(private val ctx: Context, private val prefs: SharedPreferences)
         return Loaded(list, cached)
     }
 
+    private val epgLock = Any()
+
     /**
-     * Программа передач: сначала мгновенно показывается кэш разобранной программы; свежий файл скачивается и разбирается только когда нужно.
+     * Программа передач. Правила:
+     *  1. Кэш разобранной программы показывается сразу и не зависит ни от списка каналов, ни от наличия скачанного файла.
+     *  2. Свежий файл скачивается и разбирается в фоне, только если старому больше [EPG_MAX_AGE_MS] (или кэш не совпал с каналами).
+     *  3. Любая ошибка сети/разбора оставляет на экране прежнюю программу.
+     * [haveData] — программа уже показана (тихое обновление по таймеру): кэш повторно не читаем.
      * [plEpg] — адрес из заголовка плейлиста, [defaultEpg] — запасной. Вызывать из фонового потока.
      */
-    fun loadEpg(chs: List<Channel>, plEpg: String, defaultEpg: String, force: Boolean, tz: Int, l: EpgListener) {
-        val eu = (prefs.getString("epg", "") ?: "").ifEmpty { plEpg }.ifEmpty { defaultEpg }
-        if (eu.isEmpty()) { l.onNoUrl(); return }
-        val ef = File(ctx.filesDir, "epg.bin")
-        val cf = File(ctx.filesDir, "epg.cache")
-        val key = eu + "|" + tz + "|" + chs.size + "|" + chs.joinToString("\u0001") { it.id + "\u0002" + it.name }.hashCode()
-        var downloaded = false
-        fun download() { Iptv.download(eu, ef); prefs.edit().putString("epgsrc", eu).apply(); downloaded = true }
-        fun publish(eids: List<String>, map: Map<String, List<Prog>>): Int {
-            var m = 0
-            for ((i, c) in chs.withIndex()) { c.eid = eids[i]; if (c.eid.isNotEmpty() && map.containsKey(c.eid)) m++ }
-            l.onEpg(eids, map, m)
-            return m
-        }
-        fun parseAndPublish(): Int {
-            val e = Iptv.parseEpg(ef, tz, chs)
-            val eids = chs.map { Iptv.matchEid(e, it) }
-            val m = publish(eids, e.map)
-            try { EpgCache.save(cf, key, ef.lastModified(), eids, e.map) } catch (x: Exception) { cf.delete() }
-            return m
-        }
-        try {
-            var shownFromCache = false
-            if (!force && cf.exists() && ef.exists()) {
-                try {
-                    val c = EpgCache.load(cf, key, ef.lastModified())
-                    if (c != null && c.first.size == chs.size) { publish(c.first, c.second); shownFromCache = true }
-                } catch (x: Exception) { cf.delete() }
+    fun loadEpg(chs: List<Channel>, plEpg: String, defaultEpg: String, force: Boolean, tz: Int, l: EpgListener, haveData: Boolean = false) {
+        synchronized(epgLock) {   // два обновления одновременно не должны писать в одни и те же файлы
+            try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND) } catch (e: Exception) {}
+            val eu = (prefs.getString("epg", "") ?: "").ifEmpty { plEpg }.ifEmpty { defaultEpg }
+            if (eu.isEmpty()) { if (!haveData) l.onNoUrl(); return }
+            val ef = File(ctx.filesDir, "epg.bin")
+            val cf = File(ctx.filesDir, "epg.cache")
+            val key = "v2|" + eu + "|" + tz
+            val ckeys = chs.map { it.id + "\u0002" + it.name }
+            var downloaded = false
+            fun download() { Iptv.download(eu, ef); prefs.edit().putString("epgsrc", eu).apply(); downloaded = true }
+            fun publish(eids: List<String>, map: Map<String, List<Prog>>): Int {
+                var m = 0
+                for ((i, c) in chs.withIndex()) { c.eid = eids[i]; if (c.eid.isNotEmpty() && map.containsKey(c.eid)) m++ }
+                l.onEpg(eids, map, m)
+                return m
             }
-            val fresh = !force && ef.exists() && System.currentTimeMillis() - ef.lastModified() < 6 * 3600000L && prefs.getString("epgsrc", "") == eu
-            if (shownFromCache && fresh) return
-            if (!fresh) {
-                try { download() } catch (dl: Exception) {
-                    // не скачалось — остаёмся на прежних данных, если они от того же источника
-                    if (shownFromCache) return
-                    if (!(ef.exists() && prefs.getString("epgsrc", "") == eu)) throw dl
+            fun parseAndPublish(): Int {
+                val e = Iptv.parseEpg(ef, tz, chs)
+                val eids = chs.map { Iptv.matchEid(e, it) }
+                val m = publish(eids, e.map)
+                try { EpgCache.save(cf, key, ef.lastModified(), ckeys, eids, e.map) } catch (x: Exception) { cf.delete() }
+                return m
+            }
+            try {
+                var shown = haveData      // на экране уже есть программа
+                var inSync = haveData     // и она соответствует текущему файлу и текущему списку каналов
+                if (!force && !haveData && cf.exists()) {
+                    try {
+                        val c = EpgCache.load(cf, key)
+                        if (c != null) {
+                            val byKey = HashMap<String, String>()
+                            c.chKeys.forEachIndexed { i, k -> byKey[k] = c.eids[i] }
+                            publish(ckeys.map { byKey[it] ?: "" }, c.map)
+                            shown = true
+                            inSync = ef.exists() && c.src == ef.lastModified() && ckeys.all { byKey.containsKey(it) }
+                        }
+                    } catch (x: Exception) { cf.delete() }
                 }
+                val canParse = ef.exists() && prefs.getString("epgsrc", "") == eu
+                val fresh = !force && canParse && System.currentTimeMillis() - ef.lastModified() < EPG_MAX_AGE_MS
+                if (shown && inSync && fresh) return
+                if (!fresh) {
+                    try { download() } catch (dl: Exception) {
+                        // не скачалось — остаёмся на прежних данных
+                        if (shown && (inSync || !canParse)) return
+                        if (!canParse) throw dl
+                    }
+                }
+                if (shown && inSync && !downloaded) return
+                var m = try { parseAndPublish() } catch (ex: Exception) {
+                    if (downloaded) { ef.delete(); throw ex }   // битый файл: в следующий раз скачаем заново
+                    -1
+                }
+                if (m <= 0 && !downloaded) { try { download(); m = parseAndPublish() } catch (ex: Exception) { if (m < 0) throw ex } }
+            } catch (ex: Throwable) {
+                l.onError(ex)
             }
-            if (shownFromCache && !downloaded) return
-            var m = try { parseAndPublish() } catch (ex: Exception) { if (downloaded) throw ex; -1 }
-            if (m <= 0 && !downloaded) { try { download(); m = parseAndPublish() } catch (ex: Exception) { if (m < 0) throw ex } }
-        } catch (ex: Throwable) {
-            l.onError(ex)
         }
+    }
+
+    companion object {
+        /** Файл программы старше этого возраста скачивается заново. */
+        const val EPG_MAX_AGE_MS = 6 * 3600000L
     }
 }

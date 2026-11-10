@@ -182,6 +182,7 @@ class MainActivity : Activity() {
     private lateinit var btDim: Button
     private lateinit var dimOverlay: View
     private val DIM_MIN = 30
+    private val EPG_CHECK_MS = 30 * 60 * 1000L   // как часто проверять, не пора ли тихо обновить программу
     private var panelDim = 95   // непрозрачность подложки панелей (списки каналов, телепрограмма, группы, серверы), %
     private var triedHls = false
     private var ctype = "flussonic"
@@ -1430,7 +1431,7 @@ class MainActivity : Activity() {
             toast(L.t("Загрузка программы передач…"))
             epgStatus = L.t("загрузка…")
             val cs = chans; val g = loadGen
-            Thread { loadEpgNow(cs, plEpgUrl, false, newTz, g) }.start()
+            Thread { loadEpgNow(cs, plEpgUrl, false, newTz, g, silent = false) }.start()
             return 1
         }
         return 0
@@ -2185,7 +2186,8 @@ class MainActivity : Activity() {
         val gen = ++loadGen   // результаты более ранних загрузок будут отброшены
         val pl = prefs.getString("pl", "") ?: ""
         val tz = tzMin()
-        epg = emptyMap(); Session.epg = emptyMap(); epgStatus = L.t("загрузка…")
+        // программа остаётся на экране, пока грузится плейлист; сбрасываем её только при переходе на другой плейлист
+        if (pl != Session.pl) { epg = emptyMap(); Session.epg = emptyMap(); epgStatus = L.t("загрузка…") }
         toast(L.t("Загрузка плейлиста…"))
         Thread {
             try {
@@ -2207,11 +2209,17 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    /** Загрузка программы передач (вызывать из фонового потока): работу делает [Repository], здесь только показ результата. */
-    private fun loadEpgNow(chs: List<Channel>, plEpg: String, force: Boolean, tz: Int, gen: Int = loadGen) {
+    /**
+     * Загрузка программы передач (вызывать из фонового потока): работу делает [Repository], здесь только показ результата.
+     * [silent] — без уведомлений и без сообщений об ошибке, если программа уже есть на экране (автоматические обновления).
+     */
+    private fun loadEpgNow(chs: List<Channel>, plEpg: String, force: Boolean, tz: Int, gen: Int = loadGen, silent: Boolean = !force, haveData: Boolean = false) {
         repo.loadEpg(chs, plEpg, getString(R.string.default_epg), force, tz, object : EpgListener {
             override fun onNoUrl() {
-                runOnUiThread { epgStatus = L.t("адрес не указан"); toast(L.t("В плейлисте нет адреса программы передач (url-tvg) — его можно указать в настройках")) }
+                runOnUiThread {
+                    epgStatus = L.t("адрес не указан")
+                    if (!silent) toast(L.t("В плейлисте нет адреса программы передач (url-tvg) — его можно указать в настройках"))
+                }
             }
 
             override fun onEpg(eids: List<String>, map: Map<String, List<Prog>>, matched: Int) {
@@ -2221,7 +2229,7 @@ class MainActivity : Activity() {
                     epg = map
                     Session.epg = map
                     epgStatus = L.f("передач {0}, каналов с программой {1} из {2}", total, matched, chs.size)
-                    toast(L.f("Программа: {0}", L.t(epgStatus)))
+                    if (!silent) toast(L.f("Программа: {0}", L.t(epgStatus)))
                     if (chPanel.visibility == View.VISIBLE && !moving) { val sp = chList.selectedItemPosition; renderChans(); chList.setSelection(sp.coerceAtLeast(0)) }
                     if (setup.visibility == View.VISIBLE) tvStat.text = L.f("Программа передач: {0}", L.t(epgStatus))
                     hud()
@@ -2231,12 +2239,30 @@ class MainActivity : Activity() {
             override fun onError(e: Throwable) {
                 runOnUiThread {
                     if (gen != loadGen) return@runOnUiThread
+                    // тихое обновление не трогает уже показанную программу и ничего не сообщает
+                    if (silent && epg.isNotEmpty()) return@runOnUiThread
                     epgStatus = L.t("ошибка: ") + Iptv.safeMsg(e) + (if (e.message?.contains("403") == true) L.t(" — сервер отклонил запрос; проверьте ссылку в браузере или задайте User-Agent в настройках") else "")
-                    toast(L.f("Программа передач: {0}", L.t(epgStatus)))
+                    if (!silent) toast(L.f("Программа передач: {0}", L.t(epgStatus)))
                     if (setup.visibility == View.VISIBLE) tvStat.text = L.f("Программа передач: {0}", L.t(epgStatus))
                 }
             }
-        })
+        }, haveData)
+    }
+
+    /* ---------- тихое автообновление программы ---------- */
+    private val epgBusy = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val epgTick: Runnable = object : Runnable {
+        override fun run() { refreshEpgQuietly(); ui.postDelayed(this, EPG_CHECK_MS) }
+    }
+
+    /** Если файл программы устарел — скачивает и разбирает его в фоне; пользователь ничего не замечает. Если свежий — ничего не делает. */
+    private fun refreshEpgQuietly() {
+        val cs = chans
+        if (cs.isEmpty() || !epgBusy.compareAndSet(false, true)) return
+        val g = loadGen; val tz = tzMin(); val pe = plEpgUrl; val have = epg.isNotEmpty()
+        Thread {
+            try { loadEpgNow(cs, pe, false, tz, g, silent = true, haveData = have) } finally { epgBusy.set(false) }
+        }.start()
     }
 
     /* ---------- пульт ---------- */
@@ -2380,6 +2406,7 @@ class MainActivity : Activity() {
     override fun onStop() {
         super.onStop()
         started = false
+        ui.removeCallbacks(epgTick)
         saveArcPos()
         ui.removeCallbacks(retryRun); ui.removeCallbacks(stallRun)
         player.playWhenReady = false
@@ -2387,6 +2414,8 @@ class MainActivity : Activity() {
     override fun onStart() {
         super.onStart()
         started = true
+        // вернулись в приложение (или запустили его): через пару секунд проверяем, не устарела ли программа, и дальше — раз в 30 минут
+        ui.removeCallbacks(epgTick); ui.postDelayed(epgTick, 3000)
         val c = cur
         if (c != null) {
             if (arch == null) startUrl(c.url) else player.playWhenReady = true

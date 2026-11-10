@@ -377,7 +377,7 @@ object Iptv {
         val nowS = System.currentTimeMillis() / 1000
         val keepDays = (chans?.maxOfOrNull { if (it.days > 0) it.days else 7 } ?: 14).coerceIn(1, 14)
         val lo = nowS - keepDays * 86400L
-        val hi = nowS + 2 * 86400L
+        val hi = nowS + 3 * 86400L   // запас вперёд: программа не кончается, даже если сеть пропала на пару дней
         var wanted: Set<String>? = null
         var chId = ""; var inCh = false; var pch = ""
         var s = 0L; var e = 0L; var title = ""; var inProg = false

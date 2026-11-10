@@ -17,21 +17,28 @@ class EpgCacheTest {
 
     @Test fun roundtrip() {
         val f = tmp.newFile("epg.cache")
-        EpgCache.save(f, "key", 42L, listOf("a", "", "b"), map)
-        val r = EpgCache.load(f, "key", 42L)
+        EpgCache.save(f, "key", 42L, listOf("1|A", "2|B", "3|C"), listOf("a", "", "b"), map)
+        val r = EpgCache.load(f, "key")
         assertNotNull(r)
-        assertEquals(listOf("a", "", "b"), r!!.first)
-        assertEquals(2, r.second.size)
-        val a = r.second["a"]!!
+        assertEquals(42L, r!!.src)
+        assertEquals(listOf("1|A", "2|B", "3|C"), r.chKeys)
+        assertEquals(listOf("a", "", "b"), r.eids)
+        assertEquals(2, r.map.size)
+        val a = r.map["a"]!!
         assertEquals(2, a.size)
         assertEquals(200L, a[1].s); assertEquals(300L, a[1].e); assertEquals("Кино", a[1].title)
-        assertEquals("Новости", r.second["b"]!![0].title)
+        assertEquals("Новости", r.map["b"]!![0].title)
     }
 
-    @Test fun stale_cache_is_rejected() {
+    @Test fun other_source_is_rejected() {
         val f = tmp.newFile("epg2.cache")
-        EpgCache.save(f, "key", 42L, listOf("a"), map)
-        assertNull(EpgCache.load(f, "other", 42L))   // другой источник/пояс/список каналов
-        assertNull(EpgCache.load(f, "key", 43L))     // файл программы обновился
+        EpgCache.save(f, "key", 42L, listOf("1|A"), listOf("a"), map)
+        assertNull(EpgCache.load(f, "other"))   // другой адрес/пояс
+    }
+
+    @Test fun save_leaves_no_temp_file() {
+        val f = tmp.newFile("epg3.cache")
+        EpgCache.save(f, "key", 1L, listOf("1|A"), listOf("a"), map)
+        assertEquals(false, java.io.File(f.parentFile, "epg3.cache.tmp").exists())
     }
 }
