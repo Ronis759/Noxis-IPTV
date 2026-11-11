@@ -33,6 +33,7 @@ object SettingsBackup {
 
     private fun typeOf(key: String): T? = exact[key] ?: when {
         key.startsWith(KeyMap.PREF) && key.length > KeyMap.PREF.length -> T.STR   // назначения кнопок пульта: id действия
+        key.startsWith(KeyMap.LONG_PREF) && key.length > KeyMap.LONG_PREF.length -> T.STR   // долгое нажатие кнопок пульта: id действия
         key.startsWith("arcv_") && key.length > 5 -> T.INT                         // запомненный формат ссылки архива по серверу
         else -> null
     }

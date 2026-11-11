@@ -37,6 +37,8 @@ class SettingsBackupTest {
         assertTrue(SettingsBackup.isBackupKey("km_82"))
         assertTrue(SettingsBackup.isBackupKey("fav"))
         assertFalse(SettingsBackup.isBackupKey("km_"))
+        assertTrue(SettingsBackup.isBackupKey("kl_21"))   // долгое нажатие кнопок пульта
+        assertFalse(SettingsBackup.isBackupKey("kl_"))
     }
 
     @Test fun wrong_types_and_unknown_keys_are_dropped() {

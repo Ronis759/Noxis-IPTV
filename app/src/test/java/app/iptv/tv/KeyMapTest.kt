@@ -49,4 +49,22 @@ class KeyMapTest {
         assertEquals(KeyAction.FAV, KeyMap.next(KeyAction.NONE, 1))
         assertEquals(KeyAction.ARCH_FWD, KeyMap.next(KeyAction.ARCH_BACK, 1))
     }
+
+    @Test fun long_press_defaults_and_ok_is_configurable() {
+        assertEquals(KeyAction.REWIND, KeyMap.resolveLong(KeyEvent.KEYCODE_DPAD_LEFT, null))
+        assertEquals(KeyAction.NONE, KeyMap.resolveLong(KeyEvent.KEYCODE_DPAD_CENTER, null))
+        assertEquals(KeyAction.NONE, KeyMap.resolveLong(KeyEvent.KEYCODE_DPAD_UP, null))
+        assertEquals(KeyAction.NONE, KeyMap.resolveLong(KeyEvent.KEYCODE_DPAD_DOWN, null))
+        assertEquals(KeyAction.NONE, KeyMap.resolveLong(KeyEvent.KEYCODE_DPAD_RIGHT, null))
+        assertEquals(KeyAction.CHANNELS, KeyMap.resolveLong(KeyEvent.KEYCODE_DPAD_CENTER, "channels"))
+        assertEquals(KeyAction.REWIND, KeyMap.resolveLong(KeyEvent.KEYCODE_DPAD_LEFT, "bogus"))
+    }
+
+    @Test fun long_press_buttons_cover_ok_and_arrows() {
+        assertEquals(5, KeyMap.longButtons.size)
+        assertEquals(KeyMap.longButtons.size, KeyMap.longButtons.map { it.code }.toSet().size)
+        assertNotNull(KeyMap.findLong(KeyEvent.KEYCODE_DPAD_CENTER))
+        assertNotNull(KeyMap.findLong(KeyEvent.KEYCODE_ENTER))   // ENTER = OK
+        assertNull(KeyMap.findLong(KeyEvent.KEYCODE_BACK))
+    }
 }

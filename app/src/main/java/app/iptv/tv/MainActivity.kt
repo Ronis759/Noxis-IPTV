@@ -102,6 +102,7 @@ class MainActivity : Activity() {
     private val secTitles = ArrayList<String>()
     private val secHeads = ArrayList<Button>()
     private val secBodies = ArrayList<LinearLayout>()
+    private val keyBtnsLong = ArrayList<Button>()   // кнопки «Долгое нажатие» в разделе «Кнопки пульта»
     private val keyBtns = ArrayList<Button>()   // кнопки раздела «Кнопки пульта» (подписи обновляются при сбросе)
     private var srvBackToSetup = false   // панель серверов открыта из настроек (Назад вернёт туда)
     private lateinit var hudLogo: ImageView
@@ -180,8 +181,10 @@ class MainActivity : Activity() {
     private lateinit var btStart: Button
     private lateinit var btZap: Button
     private lateinit var btOk: Button
-    private var leftPending = false   // ← нажата в прямом эфире: короткое нажатие (архив) выполняется при отпускании
-    private var leftLong = false      // долгое нажатие ← уже включило перемотку текущей передачи
+    // долгое нажатие: кнопка с назначенным долгим действием ждёт отпускания (короткое действие) или 0,5 с (долгое)
+    private var longKey = 0           // код (нормализованный) кнопки, которая сейчас держится; 0 — нет
+    private var longState = 0         // 0 — ждём, 1 — долгое действие выполнено, 2 — долгое не сработало (при отпускании выполнится короткое)
+    private var longAct = KeyAction.NONE
     private lateinit var btDim: Button
     private lateinit var dimOverlay: View
     private val DIM_MIN = 30
@@ -199,16 +202,11 @@ class MainActivity : Activity() {
         if (player.playWhenReady && player.playbackState == Player.STATE_BUFFERING && !scheduleRetry()) toast(L.t("Поток не отвечает"))
     }
     private val hideSeek = Runnable { seekBox.visibility = View.GONE; ui.removeCallbacks(seekTick) }
+    // пока виден инфобар в архиве / при перемотке — полоса прогресса следует за позицией воспроизведения
     private val seekTick: Runnable = object : Runnable {
-        override fun run() { if (seekBox.visibility == View.VISIBLE && arch != null) { updateSeek(); ui.postDelayed(this, 500) } }
+        override fun run() { if (hudBox.visibility == View.VISIBLE && arch != null) { updateHudProgress(); ui.postDelayed(this, 500) } }
     }
-    // пока инфобар канала показан во время перемотки, полоса прогресса следит за позицией воспроизведения
-    private val hudTick: Runnable = object : Runnable {
-        override fun run() {
-            if (hudBox.visibility == View.VISIBLE && arch != null) { updateHudArch(); ui.postDelayed(this, 500) }
-        }
-    }
-    private val hideHud = Runnable { hudBox.visibility = View.GONE; ui.removeCallbacks(hudTick) }
+    private val hideHud = Runnable { hudBox.visibility = View.GONE }
     private val showBuf = Runnable { bufView.visibility = View.VISIBLE }
     private val hideToast = Runnable { toastTv.visibility = View.GONE }
 
@@ -478,24 +476,21 @@ class MainActivity : Activity() {
         return String.format(Locale.US, "%d:%02d:%02d", t / 3600, t / 60 % 60, t % 60)
     }
 
-    private fun updateSeek() {
+    /** В архиве / при перемотке показываем тот же инфобар канала, а в его полосе — прогресс воспроизведения. */
+    private fun showSeek() {
+        if (arch == null) return
+        seekBox.visibility = View.GONE
+        hud()
+    }
+
+    /** Полоса инфобара в архиве: позиция воспроизведения в передаче и время «позиция / длительность». */
+    private fun updateHudProgress() {
         val a = arch ?: return
         val total = (a.e - a.s) * 1000
         if (total <= 0) return
         val pos = player.currentPosition.coerceIn(0L, total)
-        seekT.text = "⏪ " + a.title + "   " + hm(a.s) + "–" + hm(a.e)
-        seekBar.progress = (pos * 1000 / total).toInt()
-        seekL.text = fmtT(pos) + "   (" + hm(a.s + pos / 1000) + ")"
-        seekR.text = fmtT(total)
-    }
-
-    private fun showSeek() {
-        if (arch == null) return
-        hudBox.visibility = View.GONE
-        updateSeek()
-        seekBox.visibility = View.VISIBLE
-        ui.removeCallbacks(hideSeek); ui.postDelayed(hideSeek, 5000)
-        ui.removeCallbacks(seekTick); ui.postDelayed(seekTick, 500)
+        hudBar.progress = (pos * 1000 / total).toInt(); hudBar.visibility = View.VISIBLE
+        hudLeft.text = "⏪ " + fmtT(pos) + " / " + fmtT(total); hudLeft.visibility = View.VISIBLE
     }
 
     /** Перемотка в архиве на [d] мс с показом панели перемотки. */
@@ -509,15 +504,23 @@ class MainActivity : Activity() {
             if (c != null) { playChan(c); toast(L.t("Прямой эфир")); return }
         }
         player.seekTo(target)
-        if (hudShownOnly()) hud() else showSeek()   // инфобар канала не пропадает: полоса показывает прогресс перемотки
+        showSeek()
     }
 
     /** Долгое ← в прямом эфире: текущая передача включается из архива чуть раньше «сейчас»; дальше перематывает удержание. */
     private fun rewindLive(p: Prog) {
         val back = 30000L
-        val keepHud = hudShownOnly()   // инфобар канала был открыт (например, после OK) — оставляем его, а не заменяем панелью перемотки
         playArch(p, from = maxOf(0L, (now() - p.s) * 1000 - back), announce = false)
-        if (keepHud) hud() else showSeek()
+        showSeek()
+    }
+
+    /** Долгое ←: в прямом эфире включает текущую передачу из архива чуть раньше «сейчас»; в архиве — перематывает на 30 с назад. false — перематывать нечего (нет программы). */
+    private fun rewindProg(): Boolean {
+        if (arch != null) { seekArch(-30000); return true }
+        val p = cur?.let { nowProg(it) } ?: return false
+        if (p.e <= p.s) return false
+        rewindLive(p)
+        return true
     }
 
     private fun buildToast() {
@@ -1020,7 +1023,7 @@ class MainActivity : Activity() {
         // ----- Кнопки пульта: OK / ► — следующее действие, ◄ — предыдущее -----
         val keyInfo = TextView(this).apply {
             text = L.t("Назначение кнопок при просмотре эфира. OK или ► — следующее действие, ◄ — предыдущее. ") +
-                L.t("Стрелки джойстика переназначаются только при просмотре эфира. OK, «Назад» и цифры не меняются; в списках и меню кнопки работают как раньше.")
+                L.t("Стрелки джойстика переназначаются только при просмотре эфира. Короткое OK, «Назад» и цифры не меняются; в списках и меню кнопки работают как раньше.")
             textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(4), 0, dp(4))
         }
         for (kb in KeyMap.buttons) {
@@ -1036,11 +1039,25 @@ class MainActivity : Activity() {
             }
             keyBtns.add(b)
         }
+        for (kb in KeyMap.longButtons) {
+            val b = small(tvButton(longLabel(kb))).apply {
+                setOnClickListener { setLongAction(kb, KeyMap.next(longAction(kb.code), 1)); text = longLabel(kb) }
+                setOnKeyListener { _, k, e ->
+                    if (e.action == KeyEvent.ACTION_DOWN && (k == KeyEvent.KEYCODE_DPAD_LEFT || k == KeyEvent.KEYCODE_DPAD_RIGHT)) {
+                        setLongAction(kb, KeyMap.next(longAction(kb.code), if (k == KeyEvent.KEYCODE_DPAD_LEFT) -1 else 1))
+                        text = longLabel(kb)
+                        true
+                    } else false
+                }
+            }
+            keyBtnsLong.add(b)
+        }
         val btKeyReset = small(tvButton(L.t("Сбросить на стандартные"))).apply {
             gravity = Gravity.CENTER
             setOnClickListener {
                 val ed = prefs.edit()
                 for (kb in KeyMap.buttons) ed.remove(KeyMap.PREF + kb.code)
+                for (kb in KeyMap.longButtons) ed.remove(KeyMap.LONG_PREF + kb.code)
                 ed.apply()
                 refreshKeyButtons()
                 toast(L.t("Кнопки пульта сброшены"))
@@ -1049,6 +1066,11 @@ class MainActivity : Activity() {
         section(L.t("Кнопки пульта")) {
             addView(keyInfo)
             for (b in keyBtns) addView(b)
+            addView(TextView(this@MainActivity).apply {
+                text = L.t("Долгое нажатие (≈0,5 с) при просмотре эфира. Если на кнопку назначено долгое действие, короткое выполняется при отпускании кнопки.")
+                textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(10), 0, dp(4))
+            })
+            for (b in keyBtnsLong) addView(b)
             addView(btKeyReset)
         }
         // ----- Резервная копия: настройки в файл и обратно -----
@@ -1167,27 +1189,13 @@ class MainActivity : Activity() {
         if (a == null && p != null && p.e > p.s && t in p.s until p.e) {
             hudBar.progress = ((t - p.s) * 1000 / (p.e - p.s)).toInt(); hudBar.visibility = View.VISIBLE
             hudLeft.text = leftLabel(p.e - t); hudLeft.visibility = View.VISIBLE
-        } else if (a != null && a.e > a.s) {
-            updateHudArch()
-        } else { hudBar.visibility = View.GONE; hudLeft.visibility = View.GONE }
+        } else if (a != null) updateHudProgress()
+        else { hudBar.visibility = View.GONE; hudLeft.visibility = View.GONE }
         hudBox.visibility = View.VISIBLE
         ui.removeCallbacks(hideHud); ui.postDelayed(hideHud, 4500)
-        ui.removeCallbacks(hudTick)
-        if (a != null) ui.postDelayed(hudTick, 500)
+        ui.removeCallbacks(seekTick)
+        if (a != null) ui.postDelayed(seekTick, 500)
     }
-
-    /** Полоса инфобара в архиве / при перемотке: позиция воспроизведения внутри передачи и время «позиция / длительность». */
-    private fun updateHudArch() {
-        val a = arch ?: return
-        val total = (a.e - a.s) * 1000
-        if (total <= 0) return
-        val pos = (if (player.currentPosition > 0) player.currentPosition else startPos).coerceIn(0L, total)
-        hudBar.progress = (pos * 1000 / total).toInt(); hudBar.visibility = View.VISIBLE
-        hudLeft.text = fmtT(pos) + " / " + fmtT(total); hudLeft.visibility = View.VISIBLE
-    }
-
-    /** Инфобар канала сейчас на экране (а не панель перемотки архива). */
-    private fun hudShownOnly() = hudBox.visibility == View.VISIBLE && seekBox.visibility != View.VISIBLE
 
     /* ---------- панели ---------- */
     private fun openChans() {
@@ -1363,6 +1371,15 @@ class MainActivity : Activity() {
     /** Действие, назначенное на кнопку пульта [code]. */
     private fun keyAction(code: Int): KeyAction = KeyMap.resolve(code, prefs.getString(KeyMap.PREF + code, null))
 
+    /** Действие, назначенное на долгое нажатие кнопки [code]. */
+    private fun longAction(code: Int): KeyAction = KeyMap.resolveLong(code, prefs.getString(KeyMap.LONG_PREF + KeyMap.normLong(code), null))
+
+    private fun setLongAction(b: KeyMap.Btn, a: KeyAction) {
+        prefs.edit().putString(KeyMap.LONG_PREF + b.code, a.id).apply()
+    }
+
+    private fun longLabel(b: KeyMap.Btn) = L.t(b.name) + "  →  " + L.t(longAction(b.code).label)
+
     private fun setKeyAction(b: KeyMap.Btn, a: KeyAction) {
         prefs.edit().putString(KeyMap.PREF + b.code, a.id).apply()
     }
@@ -1371,6 +1388,7 @@ class MainActivity : Activity() {
 
     private fun refreshKeyButtons() {
         for ((i, kb) in KeyMap.buttons.withIndex()) keyBtns.getOrNull(i)?.text = keyLabel(kb)
+        for ((i, kb) in KeyMap.longButtons.withIndex()) keyBtnsLong.getOrNull(i)?.text = longLabel(kb)
     }
 
     /** Выполняет действие, назначенное на кнопку пульта (при просмотре эфира). */
@@ -1394,6 +1412,7 @@ class MainActivity : Activity() {
             KeyAction.NEXT -> step(1)
             KeyAction.ARCH_BACK -> if (arch != null) seekArch(-30000) else openArch()
             KeyAction.ARCH_FWD -> if (arch != null) seekArch(30000) else openArch()
+            KeyAction.REWIND -> if (!rewindProg()) openArch()
         }
     }
 
@@ -2448,37 +2467,61 @@ class MainActivity : Activity() {
             return true
         }
         if (k !in live) return super.dispatchKeyEvent(e)
-        // ← в прямом эфире: короткое нажатие открывает архив (выполняется при отпускании), долгое (≈0,5 с) — перематывает текущую передачу назад
-        val leftArch = k == KeyEvent.KEYCODE_DPAD_LEFT && keyAction(k) == KeyAction.ARCH_BACK
-        if (leftArch && e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) {
-            leftLong = false
-            leftPending = arch == null
-            if (leftPending) return true
-        }
-        if (leftArch && leftPending) {
+        // Долгое нажатие (OK, ↑, ↓, →, ←): если на кнопку назначено долгое действие, короткое выполняется при отпускании,
+        // долгое — после ≈0,5 с удержания. Без назначенного долгого действия кнопка работает сразу, как раньше.
+        val nk = KeyMap.normLong(k)
+        if (longKey == nk && e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) longKey = 0   // потеряли отпускание — начинаем заново
+        if (longKey == nk) {
             if (e.action == KeyEvent.ACTION_UP) {
-                leftPending = false
-                if (!leftLong && arch == null) openArch()
+                val st = longState
+                longKey = 0; longState = 0
+                if (st != 1) onLiveKey(k)
                 return true
             }
-            if (e.action == KeyEvent.ACTION_DOWN && !leftLong && arch == null && e.eventTime - e.downTime >= 500) {
-                val p = cur?.let { nowProg(it) }
-                if (p != null && p.e > p.s) { leftLong = true; rewindLive(p) }   // нет программы — при отпускании откроется архив, как раньше
+            if (longState == 0 && e.eventTime - e.downTime >= 500) {
+                longState = if (runLongAction(longAct)) 1 else 2
+                return true
             }
+            if (longState == 1) holdSeek(e, k)
+            return true
         }
-        if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) onLiveKey(k)
-        // удержание ←/→ в архиве: непрерывная перемотка с ускорением (шаг растёт, пока кнопка зажата)
-        else if (e.action == KeyEvent.ACTION_DOWN && arch != null && (k == KeyEvent.KEYCODE_DPAD_LEFT || k == KeyEvent.KEYCODE_DPAD_RIGHT) &&
-            keyAction(k).let { it == KeyAction.ARCH_BACK || it == KeyAction.ARCH_FWD }) {
-            val t = android.os.SystemClock.uptimeMillis()
-            if (t - lastHoldSeek >= 250) {
-                lastHoldSeek = t
-                val hold = e.eventTime - e.downTime
-                val step = when { hold < 1500 -> 30000L; hold < 3500 -> 60000L; else -> 120000L }
-                seekArch(if (keyAction(k) == KeyAction.ARCH_BACK) -step else step)
+        if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) {
+            val la = if (KeyMap.findLong(k) != null) longAction(k) else KeyAction.NONE
+            // в архиве ←/→ — перемотка с удержанием, долгое нажатие им не нужно
+            val seekHold = arch != null && (k == KeyEvent.KEYCODE_DPAD_LEFT || k == KeyEvent.KEYCODE_DPAD_RIGHT) &&
+                keyAction(k).let { it == KeyAction.ARCH_BACK || it == KeyAction.ARCH_FWD }
+            if (la != KeyAction.NONE && !seekHold && numBuf.isEmpty()) {
+                longKey = nk; longState = 0; longAct = la
+                return true
             }
-        }
+            onLiveKey(k)
+        } else if (e.action == KeyEvent.ACTION_DOWN) holdSeek(e, k)
         return true
+    }
+
+    /** Долгое действие. false — выполнить нечего (например, нет программы для перемотки): тогда при отпускании сработает короткое. */
+    private fun runLongAction(a: KeyAction): Boolean {
+        if (a == KeyAction.REWIND) return rewindProg()
+        runKeyAction(a)
+        return true
+    }
+
+    /** Удержание ←/→ в архиве: непрерывная перемотка с ускорением (шаг растёт, пока кнопка зажата). */
+    private fun holdSeek(e: KeyEvent, k: Int) {
+        if (arch == null) return
+        if (k != KeyEvent.KEYCODE_DPAD_LEFT && k != KeyEvent.KEYCODE_DPAD_RIGHT) return
+        val dir = when {
+            longAct == KeyAction.REWIND && longKey == KeyMap.normLong(k) -> -1
+            keyAction(k) == KeyAction.ARCH_BACK -> -1
+            keyAction(k) == KeyAction.ARCH_FWD -> 1
+            else -> return
+        }
+        val t = android.os.SystemClock.uptimeMillis()
+        if (t - lastHoldSeek < 250) return
+        lastHoldSeek = t
+        val hold = e.eventTime - e.downTime
+        val step = when { hold < 1500 -> 30000L; hold < 3500 -> 60000L; else -> 120000L }
+        seekArch(dir * step)
     }
 
     private var exitDlg: android.app.AlertDialog? = null
