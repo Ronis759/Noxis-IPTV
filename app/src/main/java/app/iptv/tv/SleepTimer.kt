@@ -79,7 +79,7 @@ class SleepTimer(private val onWarning: (Long) -> Unit, private val onExpire: ()
         if (tickCallback != null) {
             tickRunnable = object : Runnable {
                 override fun run() {
-                    if (isActive) {
+                    if (isActive && onTick != null) {
                         val remaining = (expiresAt - System.currentTimeMillis()) / 1000
                         if (remaining > 0) {
                             onTick?.invoke(remaining)
@@ -101,6 +101,7 @@ class SleepTimer(private val onWarning: (Long) -> Unit, private val onExpire: ()
         mainRunnable = null
         warningRunnable = null
         tickRunnable = null
+        expiresAt = 0
         onTick = null
     }
 

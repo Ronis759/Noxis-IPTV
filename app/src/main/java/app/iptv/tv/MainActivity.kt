@@ -250,6 +250,8 @@ class MainActivity : Activity() {
         Theme.use(prefs.getString("theme", "teal"))
         reopenSetup = prefs.getBoolean("reopen", false)
         if (reopenSetup) prefs.edit().remove("reopen").apply()
+        restoring = prefs.getBoolean("restoring", false)
+        if (restoring) prefs.edit().remove("restoring").apply()
         Iptv.customUa = prefs.getString("ua", "") ?: ""
         Iptv.goodUa = prefs.getString("gua", "")?.ifEmpty { null }
         httpFactory = DefaultHttpDataSource.Factory()
@@ -2226,6 +2228,7 @@ class MainActivity : Activity() {
             is Set<*> -> ed.putStringSet(k, v.filterIsInstance<String>().toSet())
         }
         ed.putBoolean("reopen", true)
+        ed.putBoolean("restoring", true)  // Сохраняем флаг для новой instance
         ed.commit()
         Session.clear()   // плейлист другого сервера: заново загрузить
         recreate()
@@ -2586,7 +2589,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         sleepTimer.cancel()
         super.onDestroy()
-        ui.removeCallbacksAndMessages(null)
+        ui.removeCallbacksAndMessages(null)  // Очистить ВСЕ callbacks Handler'а для предотвращения утечек
         Iptv.onUa = null
         player.release()
     }
