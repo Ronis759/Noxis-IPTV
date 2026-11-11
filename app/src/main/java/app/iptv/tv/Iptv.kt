@@ -112,7 +112,7 @@ object Iptv {
     /** [remember] = false для побочных запросов (логотипы): они не меняют общий User-Agent и не перебирают их при 403. */
     fun http(url: String, remember: Boolean = true, max: Long = MAX_PLAYLIST, ua: String? = null): ByteArray =
         withUa(url, remember && ua == null, remember && ua == null, ua) { c ->
-            if (c.contentLengthLong > max) throw TooBigException(max)
+            if (c.contentLength >= 0 && c.contentLength.toLong() > max) throw TooBigException(max)
             c.inputStream.use { readLimited(it, max) }
         }
 
@@ -149,7 +149,7 @@ object Iptv {
         val tmp = File(dest.parentFile, dest.name + ".tmp")
         try {
             withUa(url, ua == null, ua == null, ua) { c ->
-                if (c.contentLengthLong > max) throw TooBigException(max)
+                if (c.contentLength >= 0 && c.contentLength.toLong() > max) throw TooBigException(max)
                 c.inputStream.use { i -> tmp.outputStream().use { o -> copyLimited(i, o, max) } }
             }
             if (!tmp.renameTo(dest)) {

@@ -40,6 +40,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -60,6 +61,7 @@ private const val RC_EXPORT = 8
 private const val RC_IMPORT = 9
 private const val RC_PERM = 10
 
+@UnstableApi
 class MainActivity : Activity() {
     private lateinit var player: ExoPlayer
     private lateinit var pv: PlayerView
@@ -1226,7 +1228,11 @@ class MainActivity : Activity() {
     private fun ordered(): List<Channel> = when (sortMode) {
         "az" -> chans.sortedBy { it.name.lowercase() }
         "fav" -> chans.sortedBy { if (isFav(it)) 0 else 1 }
-        "custom" -> { val pos = HashMap<String, Int>(); customOrder.forEachIndexed { i, n -> pos.putIfAbsent(n, i) }; chans.sortedBy { pos[it.okey] ?: Int.MAX_VALUE } }
+        "custom" -> {
+            val pos = HashMap<String, Int>()
+            customOrder.forEachIndexed { i, n -> if (!pos.containsKey(n)) pos[n] = i }
+            chans.sortedBy { pos[it.okey] ?: Int.MAX_VALUE }
+        }
         else -> chans
     }
 

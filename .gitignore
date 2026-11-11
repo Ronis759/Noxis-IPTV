@@ -1,15 +1,27 @@
-build/
+# Gradle
 .gradle/
+.gradle-user/
+build/
+
+# Android Studio / IntelliJ IDEA
 .idea/
 *.iml
+
+# Local Android SDK configuration
 local.properties
+
+# Android build and capture files
 captures/
+
+# Operating system
 .DS_Store
-# личные данные и ключи — никогда не коммитить
+Thumbs.db
+
+# Personal server lists and credentials
 servers.txt
 *.keystore
 *.jks
 *.p12
 
-# резервные копии настроек (в ссылках бывают логины и ключи)
+# Settings backups containing URLs, logins or keys
 noxis-settings*.json
