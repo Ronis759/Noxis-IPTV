@@ -40,6 +40,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -60,6 +61,7 @@ private const val RC_EXPORT = 8
 private const val RC_IMPORT = 9
 private const val RC_PERM = 10
 
+@UnstableApi
 class MainActivity : Activity() {
     private lateinit var player: ExoPlayer
     private lateinit var pv: PlayerView
@@ -250,6 +252,8 @@ class MainActivity : Activity() {
         Theme.use(prefs.getString("theme", "teal"))
         reopenSetup = prefs.getBoolean("reopen", false)
         if (reopenSetup) prefs.edit().remove("reopen").apply()
+        restoring = prefs.getBoolean("restoring", false)
+        if (restoring) prefs.edit().remove("restoring").apply()
         Iptv.customUa = prefs.getString("ua", "") ?: ""
         Iptv.goodUa = prefs.getString("gua", "")?.ifEmpty { null }
         httpFactory = DefaultHttpDataSource.Factory()
@@ -1224,7 +1228,11 @@ class MainActivity : Activity() {
     private fun ordered(): List<Channel> = when (sortMode) {
         "az" -> chans.sortedBy { it.name.lowercase() }
         "fav" -> chans.sortedBy { if (isFav(it)) 0 else 1 }
-        "custom" -> { val pos = HashMap<String, Int>(); customOrder.forEachIndexed { i, n -> pos.putIfAbsent(n, i) }; chans.sortedBy { pos[it.okey] ?: Int.MAX_VALUE } }
+        "custom" -> {
+            val pos = HashMap<String, Int>()
+            customOrder.forEachIndexed { i, n -> if (!pos.containsKey(n)) pos[n] = i }
+            chans.sortedBy { pos[it.okey] ?: Int.MAX_VALUE }
+        }
         else -> chans
     }
 
@@ -2226,6 +2234,7 @@ class MainActivity : Activity() {
             is Set<*> -> ed.putStringSet(k, v.filterIsInstance<String>().toSet())
         }
         ed.putBoolean("reopen", true)
+        ed.putBoolean("restoring", true)  // Сохраняем флаг для новой instance
         ed.commit()
         Session.clear()   // плейлист другого сервера: заново загрузить
         recreate()
@@ -2586,7 +2595,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         sleepTimer.cancel()
         super.onDestroy()
-        ui.removeCallbacksAndMessages(null)
+        ui.removeCallbacksAndMessages(null)  // Очистить ВСЕ callbacks Handler'а для предотвращения утечек
         Iptv.onUa = null
         player.release()
     }

@@ -39,9 +39,14 @@ object EpgCache {
                     for (p in l) { o.writeLong(p.s); o.writeLong(p.e); o.writeInt(titles[p.title]!!) }
                 }
             }
-            if (!tmp.renameTo(cf)) { cf.delete(); if (!tmp.renameTo(cf)) throw java.io.IOException("rename") }
-        } finally {
+            if (!tmp.renameTo(cf)) {
+                cf.delete()
+                if (!tmp.renameTo(cf)) throw java.io.IOException("rename failed")
+            }
+        } catch (e: Exception) {
+            // При любой ошибке удаляем временный файл
             tmp.delete()
+            throw e
         }
     }
 

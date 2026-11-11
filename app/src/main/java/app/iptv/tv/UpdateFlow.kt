@@ -24,6 +24,7 @@ class UpdateFlow(
 
     @Volatile private var busy = false
     @Volatile private var lastTry = 0L
+    private val updateLock = Any()
 
     /** Понятный текст о состоянии проверки обновлений (виден в Настройки → Обновление): почему нет значка и что нашлось. */
     @Volatile var status: String = ""
@@ -94,7 +95,17 @@ class UpdateFlow(
                     info == null -> L.f("в последнем релизе нет APK (проверено {0})", stamp())
                     else -> L.f("установлена последняя сборка {0} (проверено {1})", m, stamp())
                 }
-                if (newer) { save(info!!); available = info } else { forget(); available = null }
+                if (newer) {
+                    synchronized(updateLock) {
+                        save(info!!)
+                        available = info
+                    }
+                } else {
+                    synchronized(updateLock) {
+                        forget()
+                        available = null
+                    }
+                }
                 a.runOnUiThread {
                     if (!alive()) return@runOnUiThread
                     onChange()

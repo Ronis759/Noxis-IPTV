@@ -1,6 +1,7 @@
 package app.iptv.tv
 
 import android.os.Handler
+import java.util.Locale
 import android.os.Looper
 
 /**
@@ -35,7 +36,7 @@ class SleepTimer(private val onWarning: (Long) -> Unit, private val onExpire: ()
         fun formatRemaining(seconds: Long): String {
             val m = seconds / 60
             val s = seconds % 60
-            return String.format("%d:%02d", m, s)
+            return String.format(Locale.ROOT, "%d:%02d", m, s)
         }
     }
 
@@ -79,7 +80,7 @@ class SleepTimer(private val onWarning: (Long) -> Unit, private val onExpire: ()
         if (tickCallback != null) {
             tickRunnable = object : Runnable {
                 override fun run() {
-                    if (isActive) {
+                    if (isActive && onTick != null) {
                         val remaining = (expiresAt - System.currentTimeMillis()) / 1000
                         if (remaining > 0) {
                             onTick?.invoke(remaining)
@@ -101,6 +102,7 @@ class SleepTimer(private val onWarning: (Long) -> Unit, private val onExpire: ()
         mainRunnable = null
         warningRunnable = null
         tickRunnable = null
+        expiresAt = 0
         onTick = null
     }
 
