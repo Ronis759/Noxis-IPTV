@@ -202,7 +202,13 @@ class MainActivity : Activity() {
     private val seekTick: Runnable = object : Runnable {
         override fun run() { if (seekBox.visibility == View.VISIBLE && arch != null) { updateSeek(); ui.postDelayed(this, 500) } }
     }
-    private val hideHud = Runnable { hudBox.visibility = View.GONE }
+    // пока инфобар канала показан во время перемотки, полоса прогресса следит за позицией воспроизведения
+    private val hudTick: Runnable = object : Runnable {
+        override fun run() {
+            if (hudBox.visibility == View.VISIBLE && arch != null) { updateHudArch(); ui.postDelayed(this, 500) }
+        }
+    }
+    private val hideHud = Runnable { hudBox.visibility = View.GONE; ui.removeCallbacks(hudTick) }
     private val showBuf = Runnable { bufView.visibility = View.VISIBLE }
     private val hideToast = Runnable { toastTv.visibility = View.GONE }
 
@@ -503,14 +509,15 @@ class MainActivity : Activity() {
             if (c != null) { playChan(c); toast(L.t("Прямой эфир")); return }
         }
         player.seekTo(target)
-        showSeek()
+        if (hudShownOnly()) hud() else showSeek()   // инфобар канала не пропадает: полоса показывает прогресс перемотки
     }
 
     /** Долгое ← в прямом эфире: текущая передача включается из архива чуть раньше «сейчас»; дальше перематывает удержание. */
     private fun rewindLive(p: Prog) {
         val back = 30000L
+        val keepHud = hudShownOnly()   // инфобар канала был открыт (например, после OK) — оставляем его, а не заменяем панелью перемотки
         playArch(p, from = maxOf(0L, (now() - p.s) * 1000 - back), announce = false)
-        showSeek()
+        if (keepHud) hud() else showSeek()
     }
 
     private fun buildToast() {
@@ -1160,10 +1167,27 @@ class MainActivity : Activity() {
         if (a == null && p != null && p.e > p.s && t in p.s until p.e) {
             hudBar.progress = ((t - p.s) * 1000 / (p.e - p.s)).toInt(); hudBar.visibility = View.VISIBLE
             hudLeft.text = leftLabel(p.e - t); hudLeft.visibility = View.VISIBLE
+        } else if (a != null && a.e > a.s) {
+            updateHudArch()
         } else { hudBar.visibility = View.GONE; hudLeft.visibility = View.GONE }
         hudBox.visibility = View.VISIBLE
         ui.removeCallbacks(hideHud); ui.postDelayed(hideHud, 4500)
+        ui.removeCallbacks(hudTick)
+        if (a != null) ui.postDelayed(hudTick, 500)
     }
+
+    /** Полоса инфобара в архиве / при перемотке: позиция воспроизведения внутри передачи и время «позиция / длительность». */
+    private fun updateHudArch() {
+        val a = arch ?: return
+        val total = (a.e - a.s) * 1000
+        if (total <= 0) return
+        val pos = (if (player.currentPosition > 0) player.currentPosition else startPos).coerceIn(0L, total)
+        hudBar.progress = (pos * 1000 / total).toInt(); hudBar.visibility = View.VISIBLE
+        hudLeft.text = fmtT(pos) + " / " + fmtT(total); hudLeft.visibility = View.VISIBLE
+    }
+
+    /** Инфобар канала сейчас на экране (а не панель перемотки архива). */
+    private fun hudShownOnly() = hudBox.visibility == View.VISIBLE && seekBox.visibility != View.VISIBLE
 
     /* ---------- панели ---------- */
     private fun openChans() {
