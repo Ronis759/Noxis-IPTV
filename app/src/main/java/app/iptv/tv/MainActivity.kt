@@ -179,6 +179,9 @@ class MainActivity : Activity() {
     private var guide: Channel? = null   // канал, чья телепрограмма открыта в панели архива
     private lateinit var btStart: Button
     private lateinit var btZap: Button
+    private lateinit var btOk: Button
+    private var leftPending = false   // ← нажата в прямом эфире: короткое нажатие (архив) выполняется при отпускании
+    private var leftLong = false      // долгое нажатие ← уже включило перемотку текущей передачи
     private lateinit var btDim: Button
     private lateinit var dimOverlay: View
     private val DIM_MIN = 30
@@ -427,7 +430,7 @@ class MainActivity : Activity() {
         val hudCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(hudT); addView(hudRow)
-            addView(hudBar, LinearLayout.LayoutParams(-1, dp(4)).apply { topMargin = dp(6); bottomMargin = dp(4) })
+            addView(hudBar, LinearLayout.LayoutParams(-1, dp(6)).apply { topMargin = dp(6); bottomMargin = dp(4) })
             addView(hudN)
         }
         hudBox.addView(hudCol, LinearLayout.LayoutParams(0, -2, 1f))
@@ -493,7 +496,20 @@ class MainActivity : Activity() {
     private fun seekArch(d: Long) {
         val a = arch ?: return
         val total = (a.e - a.s) * 1000
-        player.seekTo((player.currentPosition + d).coerceIn(0L, maxOf(0L, total - 1000)))
+        val target = (player.currentPosition + d).coerceIn(0L, maxOf(0L, total - 1000))
+        // передача ещё идёт (перемотка прямого эфира назад): дошли до «сейчас» — возвращаемся в прямой эфир
+        if (d > 0 && a.e > now() && target >= (now() - a.s) * 1000 - 5000) {
+            val c = arcOwner ?: cur
+            if (c != null) { playChan(c); toast(L.t("Прямой эфир")); return }
+        }
+        player.seekTo(target)
+        showSeek()
+    }
+
+    /** Долгое ← в прямом эфире: текущая передача включается из архива чуть раньше «сейчас»; дальше перематывает удержание. */
+    private fun rewindLive(p: Prog) {
+        val back = 30000L
+        playArch(p, from = maxOf(0L, (now() - p.s) * 1000 - back), announce = false)
         showSeek()
     }
 
@@ -893,6 +909,9 @@ class MainActivity : Activity() {
         val btSound = small(tvButton(L.t("♫ Звук, субтитры, формат"))).apply { setOnClickListener { openPlayerOptions() } }
         val btFindCh = small(tvButton(L.t("⌕ Поиск канала…"))).apply { setOnClickListener { openSearch() } }
         btSleepTimer = small(tvButton(sleepTimerLabel())).apply { setOnClickListener { showSleepTimerDialog() } }
+        btOk = small(tvButton("")).apply {
+            setOnClickListener { prefs.edit().putString("okact", if (okInfo()) "list" else "info").apply(); text = okLabel() }
+        }
         btZap = small(tvButton("")).apply {
             setOnClickListener { prefs.edit().putString("zapm", if (zapByList()) "all" else "list").apply(); text = zapLabel() }
         }
@@ -984,7 +1003,7 @@ class MainActivity : Activity() {
             addView(btAdv); addView(advBox)
         }
         section(L.t("Обновление")) { addView(btReload); addView(btEpg); addView(btUpd); addView(tvUpdStat); addView(tvStat) }
-        section(L.t("Воспроизведение")) { addView(btType); addView(btZap); addView(btSound); addView(btFindCh); addView(btSleepTimer) }
+        section(L.t("Воспроизведение")) { addView(btType); addView(btOk); addView(btZap); addView(btSound); addView(btFindCh); addView(btSleepTimer) }
         section(L.t("Оформление")) {
             addView(btLang); addView(btTheme); addView(btFont); addView(btDim)
             addView(dimPreview, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(6) })
@@ -1382,6 +1401,7 @@ class MainActivity : Activity() {
         btSort.text = L.f("Порядок каналов: {0}", L.t(sortNames[sortMode].orEmpty()))
         btStart.text = startLabel()
         btZap.text = zapLabel()
+        btOk.text = okLabel()
         btDim.text = dimLabel()
         btFont.text = fontLabel()
         btTheme.text = themeLabel()
@@ -1722,6 +1742,7 @@ class MainActivity : Activity() {
         val a = arch ?: return
         val c = arcOwner ?: return
         if (readyMode == null) return
+        if (a.e > now()) return   // передача ещё идёт (перемотка прямого эфира): запоминать нечего
         val pos = player.currentPosition
         val total = (a.e - a.s) * 1000
         val k = arcKey(c, a)
@@ -1771,20 +1792,32 @@ class MainActivity : Activity() {
         hud()
     }
 
-    private fun playArch(p: Prog) {
+    /** [from] — с какой позиции (мс) начать; null — с запомненной. [announce] — показывать сообщение «Архив: …». */
+    private fun playArch(p: Prog, from: Long? = null, announce: Boolean = true) {
         val c = cur ?: return
         saveArcPos()
         arch = p; arcOwner = c
         val pref = prefs.getInt("arcv_" + Iptv.hostOf(c.url), -1)
         arcCands = Iptv.arcCandidates(c, p.s, p.e, ctype).sortedByDescending { it.first == pref }
         arcIdx = 0
-        startPos = resume[arcKey(c, p)] ?: 0L
+        startPos = from ?: (resume[arcKey(c, p)] ?: 0L)
         startUrl(arcCands[0].second)
         hud()
-        toast(if (startPos > 0) L.f("Архив: продолжаю с {0} · {1}", fmtT(startPos), p.title) else L.t("Архив: ") + hm(p.s) + " " + p.title)
+        if (announce) toast(if (startPos > 0) L.f("Архив: продолжаю с {0} · {1}", fmtT(startPos), p.title) else L.t("Архив: ") + hm(p.s) + " " + p.title)
     }
 
     /** Листать ↑/↓ по списку, выбранному в панели (группа / избранное)? По умолчанию — да; иначе по всем каналам. */
+    /** OK при просмотре: true — показать инфобар канала (повторное OK открывает список), false — сразу открыть список каналов. */
+    private fun okInfo() = prefs.getString("okact", "info") != "list"
+
+    private fun okLabel() = L.t("OK при просмотре: ") + if (okInfo()) L.t("инфобар канала (повторное OK — список)") else L.t("список каналов")
+
+    /** Инфобар канала виден (в архиве — панель перемотки). */
+    private fun osdVisible() = hudBox.visibility == View.VISIBLE || seekBox.visibility == View.VISIBLE
+
+    /** Инфобар канала с полосой прогресса передачи; в архиве — панель перемотки с позицией воспроизведения. */
+    private fun showOsd() { if (arch != null) showSeek() else hud() }
+
     private fun zapByList() = prefs.getString("zapm", "list") != "all"
 
     private fun zapLabel() = L.t("Листать ↑/↓: ") + if (zapByList()) L.t("по выбранному списку (группа, избранное)") else L.t("по всем каналам, по порядку номеров")
@@ -2391,6 +2424,24 @@ class MainActivity : Activity() {
             return true
         }
         if (k !in live) return super.dispatchKeyEvent(e)
+        // ← в прямом эфире: короткое нажатие открывает архив (выполняется при отпускании), долгое (≈0,5 с) — перематывает текущую передачу назад
+        val leftArch = k == KeyEvent.KEYCODE_DPAD_LEFT && keyAction(k) == KeyAction.ARCH_BACK
+        if (leftArch && e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) {
+            leftLong = false
+            leftPending = arch == null
+            if (leftPending) return true
+        }
+        if (leftArch && leftPending) {
+            if (e.action == KeyEvent.ACTION_UP) {
+                leftPending = false
+                if (!leftLong && arch == null) openArch()
+                return true
+            }
+            if (e.action == KeyEvent.ACTION_DOWN && !leftLong && arch == null && e.eventTime - e.downTime >= 500) {
+                val p = cur?.let { nowProg(it) }
+                if (p != null && p.e > p.s) { leftLong = true; rewindLive(p) }   // нет программы — при отпускании откроется архив, как раньше
+            }
+        }
         if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) onLiveKey(k)
         // удержание ←/→ в архиве: непрерывная перемотка с ускорением (шаг растёт, пока кнопка зажата)
         else if (e.action == KeyEvent.ACTION_DOWN && arch != null && (k == KeyEvent.KEYCODE_DPAD_LEFT || k == KeyEvent.KEYCODE_DPAD_RIGHT) &&
@@ -2425,7 +2476,11 @@ class MainActivity : Activity() {
         // переназначаемые кнопки: действие берётся из настроек (по умолчанию — прежнее поведение)
         if (KeyMap.find(k) != null) { runKeyAction(keyAction(k)); return }
         when (k) {
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> if (numBuf.isNotEmpty()) commitNum() else openChans()
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> when {
+                numBuf.isNotEmpty() -> commitNum()
+                okInfo() && !osdVisible() -> showOsd()   // первое OK — инфобар канала, повторное — список
+                else -> openChans()
+            }
             KeyEvent.KEYCODE_DPAD_LEFT -> if (arch != null) seekArch(-30000) else openArch()
             KeyEvent.KEYCODE_DPAD_RIGHT -> if (arch != null) seekArch(30000) else openArch()
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_PAGE_UP -> step(-1)

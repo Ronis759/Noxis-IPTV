@@ -22,7 +22,7 @@ object SettingsBackup {
     private val exact: Map<String, T> = mapOf(
         "pl" to T.STR, "epg" to T.STR, "srvn" to T.STR, "ua" to T.STR, "ct" to T.STR,
         "theme" to T.STR, "aspect" to T.STR, "alang" to T.STR, "sub" to T.STR,
-        "sort" to T.STR, "zapm" to T.STR, "lang" to T.STR, "order" to T.STR, "start" to T.STR, "lgrp" to T.STR, "lastk" to T.STR,
+        "sort" to T.STR, "zapm" to T.STR, "okact" to T.STR, "lang" to T.STR, "order" to T.STR, "start" to T.STR, "lgrp" to T.STR, "lastk" to T.STR,
         "hist" to T.STR, "resume" to T.STR,
         "tzm" to T.INT, "tz" to T.INT, "fs" to T.INT, "dim" to T.INT, "last" to T.INT, "ctv" to T.INT,
         "fav" to T.SET, "hg" to T.SET
