@@ -9,7 +9,7 @@ package app.iptv.tv
  */
 object SettingsBackup {
     const val FORMAT = "noxis-iptv-settings"
-    const val VERSION = 1
+    const val VERSION = 2
     const val FILE_NAME = "noxis-settings.json"
     /** Больше этого файл настроек не читаем (история и «продолжить» занимают единицы килобайт). */
     const val MAX_BYTES = 4L * 1024 * 1024
@@ -25,7 +25,7 @@ object SettingsBackup {
         "sort" to T.STR, "zapm" to T.STR, "okact" to T.STR, "lang" to T.STR, "order" to T.STR, "start" to T.STR, "lgrp" to T.STR, "lastk" to T.STR,
         "hist" to T.STR, "resume" to T.STR,
         "tzm" to T.INT, "tz" to T.INT, "fs" to T.INT, "dim" to T.INT, "last" to T.INT, "ctv" to T.INT,
-        "fav" to T.SET, "hg" to T.SET
+        "fav" to T.SET, "hg" to T.SET, "cats" to T.SET
     )
 
     private const val MAX_SET = 100_000
@@ -35,6 +35,7 @@ object SettingsBackup {
         key.startsWith(KeyMap.PREF) && key.length > KeyMap.PREF.length -> T.STR   // назначения кнопок пульта: id действия
         key.startsWith(KeyMap.LONG_PREF) && key.length > KeyMap.LONG_PREF.length -> T.STR   // долгое нажатие кнопок пульта: id действия
         key.startsWith("arcv_") && key.length > 5 -> T.INT                         // запомненный формат ссылки архива по серверу
+        key.startsWith("cat:") && key.length > 4 -> T.SET
         else -> null
     }
 

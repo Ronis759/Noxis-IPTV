@@ -168,6 +168,7 @@ class MainActivity : Activity() {
     private val G_FIND = "⌕ Поиск…"
     private var grp = G_ALL
     private lateinit var favs: PrefSet           // избранные каналы (по Channel.okey), общие для всех плейлистов
+    private lateinit var categories: ChannelCategories
     private lateinit var hiddenGroups: PrefSet   // скрытые группы (по названию)
     private lateinit var repo: Repository        // слой данных: серверы, плейлист, программа передач
     private lateinit var updates: UpdateFlow
@@ -341,6 +342,7 @@ class MainActivity : Activity() {
         repo = Repository(this, prefs)
         updates = UpdateFlow(this, prefs, { toast(it) }) { runOnUiThread { refreshRail(); refreshUpdateUi() } }
         favs = PrefSet(prefs.getStringSet("fav", emptySet()) ?: emptySet()) { prefs.edit().putStringSet("fav", HashSet(it)).apply() }
+        categories = ChannelCategories(loadCategories()) { saveCategories(it) }
         hiddenGroups = PrefSet(prefs.getStringSet("hg", emptySet()) ?: emptySet()) { prefs.edit().putStringSet("hg", HashSet(it)).apply() }
 
         // Инициализация таймера сна
@@ -618,8 +620,8 @@ class MainActivity : Activity() {
                 val c = shown[pos]
                 android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
                     .setTitle(c.name)
-                    .setItems(arrayOf(if (isFav(c)) L.t("★ Убрать из избранного") else L.t("★ В избранное"), L.t("⇅ Переместить (↑/↓)"), L.t("↺ Архив канала"))) { _, w ->
-                        if (w == 0) favAt(pos) else if (w == 1) startMove(pos) else { setZap(); playChan(c); closePanels(); openArch() }
+                    .setItems(arrayOf(if (isFav(c)) L.t("★ Убрать из избранного") else L.t("★ В избранное"), L.t("▣ Добавить в категорию"), L.t("⇅ Переместить (↑/↓)"), L.t("↺ Архив канала"))) { _, w ->
+                        if (w == 0) favAt(pos) else if (w == 1) showCategoryPicker(c) else if (w == 2) startMove(pos) else { setZap(); playChan(c); closePanels(); openArch() }
                     }.show()
             }
             true
@@ -1220,6 +1222,7 @@ class MainActivity : Activity() {
         val l = ArrayList<Row>()
         l.add(Row(G_ALL, tag = "all"))
         l.add(Row(G_HIST, tag = "hist"))
+        for (name in categories.names()) l.add(Row(name, tag = "cat"))
         for (g in groups) if (g !in hiddenGroups) l.add(Row(g, tag = "g"))
         return l
     }
@@ -1284,6 +1287,7 @@ class MainActivity : Activity() {
         else if (grp == G_HIST) { val m = chans.associateBy { it.okey }; history.mapNotNull { m[it] } }
         else if (grp == G_FIND) searchIn(all)
         else if (grp == G_ALL) all.filter { it.group !in hiddenGroups }
+        else if (grp in categories.names()) all.filter { categories.contains(grp, it.okey) }
         else all.filter { it.group == grp }
         val sel = if (moving) chList.selectedItemPosition else -1
         val nums = java.util.IdentityHashMap<Channel, Int>().also { m -> numList().forEachIndexed { k, c -> m[c] = k + 1 } }
@@ -1299,6 +1303,39 @@ class MainActivity : Activity() {
 
     /* ---------- избранное и скрытые группы ---------- */
     private fun isFav(c: Channel) = c.okey in favs
+
+    private fun loadCategories(): Map<String, Set<String>> {
+        val names = prefs.getStringSet("cats", emptySet()) ?: emptySet()
+        return names.sorted().associateWith { prefs.getStringSet("cat:$it", emptySet()) ?: emptySet() }
+    }
+
+    private fun saveCategories(all: Map<String, Set<String>>) {
+        val ed = prefs.edit().putStringSet("cats", all.keys.toHashSet())
+        all.forEach { (name, keys) -> ed.putStringSet("cat:$name", keys.toHashSet()) }
+        ed.apply()
+        if (::grpList.isInitialized) { ad(grpList).set(groupRows()); renderChans() }
+    }
+
+    private fun showCategoryPicker(c: Channel) {
+        val names = categories.names()
+        if (names.isEmpty()) { showCreateCategory(c); return }
+        val checked = names.map { categories.contains(it, c.okey) }.toBooleanArray()
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle(L.t("Категории: ") + c.name)
+            .setMultiChoiceItems(names.toTypedArray(), checked) { _, which, _ -> categories.toggle(names[which], c.okey) }
+            .setPositiveButton(L.t("Готово"), null)
+            .setNeutralButton(L.t("Создать категорию")) { _, _ -> showCreateCategory(c) }.show()
+    }
+
+    private fun showCreateCategory(channel: Channel? = null) {
+        val input = EditText(this).apply { hint = L.t("Название категории"); setSingleLine() }
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert).setTitle(L.t("Новая категория"))
+            .setView(input).setPositiveButton(L.t("Создать")) { _, _ ->
+                val name = input.text.toString().trim()
+                if (!categories.create(name)) toast(L.t("Категория уже существует или имя пустое"))
+                else { channel?.let { categories.toggle(name, it.okey) }; ad(grpList).set(groupRows()) }
+            }.setNegativeButton(L.t("Отмена"), null).show()
+    }
 
     private fun toggleFav(c: Channel) {
         favs.toggle(c.okey)
