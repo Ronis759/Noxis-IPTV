@@ -120,6 +120,7 @@ class MainActivity : Activity() {
     private lateinit var railArc: TextView
     private lateinit var railFav: TextView
     private lateinit var railGrp: TextView
+    private val categoryRail = ArrayList<TextView>()
     private var groupsOpen = false                             // развёрнут список групп рядом с каналами
     private var railHintText: String? = null                   // подпись выбранного значка (показывается в заголовке списка)
     // окно настроек
@@ -686,8 +687,11 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_HORIZONTAL
             setBackgroundColor(Theme.deep)
             setPadding(dp(6), dp(16), dp(6), dp(16))
-            for (b in listOf(railUpd, railSet, railArc, railFav, railGrp)) addView(b)
+            addView(railUpd); addView(railSet); addView(railArc); addView(railFav)
+            for (b in categoryRail) addView(b)
+            addView(railGrp)
         }
+        rebuildCategoryRail()
         chTitle.setTextColor(Color.WHITE); chTitle.setPadding(0, 0, 0, dp(10))
         val lists = LinearLayout(this).apply {
             addView(grpList, LinearLayout.LayoutParams((w * 0.22f).toInt(), -1))
@@ -722,7 +726,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun railFocused() = listOf(railUpd, railSet, railArc, railFav, railGrp).any { it.isFocused }
+    private fun railFocused() = (listOf(railUpd, railSet, railArc, railFav, railGrp) + categoryRail).any { it.isFocused }
 
     private fun setRailHint(t: String?) { railHintText = t; refreshTitle() }
 
@@ -744,7 +748,21 @@ class MainActivity : Activity() {
         styleRail(railSet, false)
         styleRail(railArc, false)
         styleRail(railFav, grp == G_FAV)
+        categoryRail.forEachIndexed { i, v -> styleRail(v, categories.names().getOrNull(i) == grp) }
         styleRail(railGrp, groupsOpen || grp != G_FAV)
+    }
+
+    /** Показывает пользовательские категории отдельными кнопками сразу под «Избранное». */
+    private fun rebuildCategoryRail() {
+        categoryRail.clear()
+        if (!::rail.isInitialized) return
+        val names = categories.names()
+        names.forEach { name ->
+            categoryRail += railBtn("★", name) { selectGroup(name) }
+        }
+        rail.removeViews(4, rail.childCount - 5)
+        categoryRail.forEachIndexed { i, button -> rail.addView(button, 4 + i) }
+        refreshRail()
     }
 
     private fun styleRail(v: TextView, active: Boolean, special: Boolean = false) {
@@ -1314,6 +1332,7 @@ class MainActivity : Activity() {
         all.forEach { (name, keys) -> ed.putStringSet("cat:$name", keys.toHashSet()) }
         ed.apply()
         if (::grpList.isInitialized) { ad(grpList).set(groupRows()); renderChans() }
+        if (::rail.isInitialized) rebuildCategoryRail()
     }
 
     private fun showCategoryPicker(c: Channel) {
