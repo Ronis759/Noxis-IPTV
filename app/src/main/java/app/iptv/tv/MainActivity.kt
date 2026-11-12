@@ -757,8 +757,9 @@ class MainActivity : Activity() {
         categoryRail.clear()
         if (!::rail.isInitialized) return
         val names = categories.names()
-        names.forEach { name ->
-            categoryRail += railBtn("★", name) { selectGroup(name) }
+        val icons = listOf("☆", "▣", "●", "◆", "◈", "✦", "⬟", "✿")
+        names.forEachIndexed { index, name ->
+            categoryRail += railBtn(icons[index % icons.size], name) { selectGroup(name) }
         }
         rail.removeViews(4, rail.childCount - 5)
         categoryRail.forEachIndexed { i, button -> rail.addView(button, 4 + i) }
