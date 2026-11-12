@@ -14,6 +14,18 @@ class ChannelCategories(
     }
 
     fun names(): List<String> = data.keys.toList()
+    fun move(name: String, delta: Int): Boolean {
+        val keys = data.keys.toMutableList()
+        val from = keys.indexOf(name)
+        val to = from + delta
+        if (from < 0 || to !in keys.indices) return false
+        keys.add(to, keys.removeAt(from))
+        val copy = keys.associateWith { data[it]!!.toSet() }
+        data.clear()
+        copy.forEach { (key, values) -> data[key] = values.toMutableSet() }
+        persist()
+        return true
+    }
     fun contains(name: String, key: String): Boolean = data[name]?.contains(key) == true
     fun channels(name: String): Set<String> = data[name]?.toSet() ?: emptySet()
 

@@ -609,6 +609,8 @@ class MainActivity : Activity() {
                 toast(L.f("Группа скрыта: {0}. Вернуть: Настройки → Группы каналов", groupName(r.title)))
                 onGroupsChanged()
                 grpList.setSelection(minOf(pos, ad(grpList).getCount() - 1))
+            } else if (r.tag == "cat") {
+                showCategoryMenu(r.title)
             }
             true
         }
@@ -756,7 +758,7 @@ class MainActivity : Activity() {
     private fun rebuildCategoryRail() {
         categoryRail.clear()
         if (!::rail.isInitialized) return
-        val names = categories.names()
+        val names = categories.names().filter { it !in hiddenGroups }
         val icons = listOf("☆", "▣", "●", "◆", "◈", "✦", "⬟", "✿")
         names.forEachIndexed { index, name ->
             categoryRail += railBtn(icons[index % icons.size], name) { selectGroup(name) }
@@ -1151,22 +1153,26 @@ class MainActivity : Activity() {
     private fun renderGroupsCard(focusIdx: Int = -1) {
         if (!::groupsBox.isInitialized) return
         groupsBox.removeAllViews()
-        val hid = groups.count { it in hiddenGroups }
-        tvGroupsInfo.text = if (groups.isEmpty()) L.t("Групп пока нет — загрузите плейлист")
-        else L.f("Всего: {0} · скрыто: {1} · OK — показать или скрыть группу", groups.size, hid)
+        val hid = groups.count { it in hiddenGroups } + categories.names().count { it in hiddenGroups }
+        val total = groups.size + categories.names().size
+        tvGroupsInfo.text = if (total == 0) L.t("Групп пока нет — загрузите плейлист")
+        else L.f("Всего: {0} · скрыто: {1} · OK — показать или скрыть группу", total, hid)
         btShowAllGroups.visibility = if (hid > 0) View.VISIBLE else View.GONE
         val counts = chans.groupingBy { it.group }.eachCount()
         val perRow = 3
         val chips = ArrayList<Button>()
+        val allNames = groups + categories.names()
         var i = 0
-        while (i < groups.size) {
+        while (i < allNames.size) {
             val line = LinearLayout(this)
             for (k in 0 until perRow) {
                 val idx = i + k
                 val lp = LinearLayout.LayoutParams(0, -2, 1f).apply { topMargin = dp(6); if (k > 0) leftMargin = dp(8) }
-                if (idx < groups.size) {
-                    val g = groups[idx]
-                    val b = groupChip(g, counts[g] ?: 0, g in hiddenGroups)
+                if (idx < allNames.size) {
+                    val g = allNames[idx]
+                    val isCat = g in categories.names()
+                    val count = if (isCat) categories.channels(g).size else counts[g] ?: 0
+                    val b = groupChip(if (isCat) "▣ $g · пользовательская" else g, count, g in hiddenGroups)
                     b.setOnClickListener { toggleGroup(g); onGroupsChanged(); renderGroupsCard(idx) }
                     chips.add(b)
                     line.addView(b, lp)
@@ -1176,6 +1182,25 @@ class MainActivity : Activity() {
             i += perRow
         }
         if (focusIdx >= 0) chips.getOrNull(focusIdx)?.requestFocus()
+    }
+
+    private fun showCategoryMenu(name: String) {
+        val items = arrayOf("↑ Переместить выше", "↓ Переместить ниже", "Скрыть группу", "Удалить группу")
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("▣ $name · пользовательская")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> categories.move(name, -1)
+                    1 -> categories.move(name, 1)
+                    2 -> hiddenGroups.toggle(name)
+                    3 -> {
+                        categories.remove(name)
+                        hiddenGroups.toggle(name)
+                        if (grp == name) selectGroup(G_ALL)
+                    }
+                }
+                onGroupsChanged()
+            }.show()
     }
 
     private fun showPanel(p: View?) {
@@ -1241,7 +1266,7 @@ class MainActivity : Activity() {
         val l = ArrayList<Row>()
         l.add(Row(G_ALL, tag = "all"))
         l.add(Row(G_HIST, tag = "hist"))
-        for (name in categories.names()) l.add(Row(name, tag = "cat"))
+        for (name in categories.names()) if (name !in hiddenGroups) l.add(Row(name, "▣  пользовательская", tag = "cat"))
         for (g in groups) if (g !in hiddenGroups) l.add(Row(g, tag = "g"))
         return l
     }
