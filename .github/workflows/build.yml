@@ -62,7 +62,7 @@ jobs:
         run: echo "name=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
       - name: Публикация релиза
         if: (github.event_name == 'push' && env.HAS_KEY == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release)
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # тег = номер запуска (по нему сравнивает автообновление), в названии — читаемая версия
           tag_name: v${{ github.run_number }}
