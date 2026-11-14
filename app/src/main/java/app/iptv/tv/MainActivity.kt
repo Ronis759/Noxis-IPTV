@@ -98,6 +98,7 @@ class MainActivity : Activity() {
     private lateinit var tvStat: TextView
     private lateinit var tvSrv: TextView
     private lateinit var btServer: Button
+    private lateinit var btAddPlaylist: Button
     private lateinit var btAdv: Button
     private lateinit var advBox: LinearLayout
     // раскрывающиеся разделы настроек: заголовок-кнопка и тело раздела
@@ -913,6 +914,9 @@ class MainActivity : Activity() {
             maxLines = 1; ellipsize = TextUtils.TruncateAt.END
         }
         btServer = small(tvButton(L.t("⇄ Выбрать сервер"))).apply { setOnClickListener { openServers() } }
+        btAddPlaylist = small(tvButton(L.t("＋ Добавить плейлист"))).apply {
+            setOnClickListener { addCurrentPlaylist() }
+        }
         val btFile = small(tvButton(L.t("Загрузить файл…"))).apply { setOnClickListener { pickFile() } }
         val btReload = small(tvButton(L.t("Обновить плейлист"))).apply {
             setOnClickListener { if (applySource(true) == 2) closePanels() }
@@ -1036,7 +1040,8 @@ class MainActivity : Activity() {
         // ----- Раскрывающиеся вкладки (порядок на экране) -----
         section(L.t("Источник")) {
             addView(label(L.t("Текущий сервер"))); addView(tvSrv)
-            addView(row(btServer, btFile))
+            addView(row(btServer, btAddPlaylist))
+            addView(btFile, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
             addView(btAdv); addView(advBox)
         }
         section(L.t("Обновление")) { addView(btReload); addView(btEpg); addView(btUpd); addView(tvUpdStat); addView(tvStat) }
@@ -1919,7 +1924,9 @@ class MainActivity : Activity() {
         saveArcPos()
         cur = c; arch = null; arcCands = emptyList(); startPos = 0L
         hideSeek.run()
-        prefs.edit().putInt("last", c.idx).putString("lastk", c.okey).apply()
+        val plKey = Integer.toHexString((prefs.getString("pl", "") ?: "").hashCode())
+        prefs.edit().putInt("last", c.idx).putString("lastk", c.okey)
+            .putString("lastk_$plKey", c.okey).apply()
         addHist(c)
         startUrl(c.url)
         hud()
@@ -2030,6 +2037,35 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Добавляет текущий адрес в список плейлистов, не заменяя уже сохранённые. */
+    private fun addCurrentPlaylist() {
+        val pl = etPl.text.toString().trim()
+        if (pl.isEmpty()) { toast(L.t("Сначала укажите ссылку на плейлист")); return }
+        val epg = etEpg.text.toString().trim()
+        val input = EditText(this).apply { hint = L.t("Например: Домашний") }
+        val name = android.app.AlertDialog.Builder(this)
+            .setTitle(L.t("Название плейлиста"))
+            .setView(input)
+            .setNegativeButton(L.t("Отмена"), null)
+            .create()
+        name.setButton(android.app.AlertDialog.BUTTON_POSITIVE, L.t("Добавить")) { _, _ ->
+            val n = input.text.toString().trim().ifEmpty { Iptv.hostOf(pl) }
+            val old = prefs.getString("saved_playlists", "") ?: ""
+            val line = listOf(n, pl, epg).joinToString("\t").replace("\n", " ")
+            val lines = old.split("\n").filter { it.isNotEmpty() && it.split("\t").getOrNull(1) != pl }.toMutableList()
+            lines.add(line)
+            prefs.edit().putString("saved_playlists", lines.joinToString("\n")).apply()
+            toast(L.t("Плейлист добавлен"))
+        }
+        name.show()
+    }
+
+    private fun savedPlaylists(): List<Server> =
+        (prefs.getString("saved_playlists", "") ?: "").split("\n").mapNotNull {
+            val p = it.split("\t")
+            if (p.size >= 2 && p[1].isNotEmpty()) Server(p[0], p[1], p.getOrElse(2) { "" }) else null
+        }
+
     /* ---------- часовой пояс программы (в минутах) ---------- */
     /** Сохранённый пояс в минутах; старое значение в часах («tz») пересчитывается. */
     private fun tzMin(): Int = if (prefs.contains("tzm")) prefs.getInt("tzm", 0) else prefs.getInt("tz", 0) * 60
@@ -2071,7 +2107,7 @@ class MainActivity : Activity() {
     }
 
     private fun openServers() {
-        val l = repo.servers()
+        val l = (repo.servers() + savedPlaylists()).distinctBy { it.pl }
         if (l.isEmpty()) { toast(L.t("Список серверов пуст. Загрузите servers.txt кнопкой «Загрузить файл…»")); openSetup(); return }
         srvBackToSetup = setup.visibility == View.VISIBLE
         val act = prefs.getString("srvn", "") ?: ""
@@ -2366,7 +2402,8 @@ class MainActivity : Activity() {
         }
         zapGrp = if (startFav) G_FAV else null
         if (msg.isNotEmpty()) toast(msg)
-        val lk = prefs.getString("lastk", "") ?: ""
+        val plKey = Integer.toHexString((prefs.getString("pl", "") ?: "").hashCode())
+        val lk = prefs.getString("lastk_$plKey", prefs.getString("lastk", "")) ?: ""
         val first = ch.firstOrNull { lk.isNotEmpty() && it.okey == lk } ?: ch.getOrElse(prefs.getInt("last", 0)) { ch[0] }
         // приложение свёрнуто — не запускаем звук в фоне, onStart сам включит выбранный канал
         if (started) playChan(first) else { cur = first; arch = null }
