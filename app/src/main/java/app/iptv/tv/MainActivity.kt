@@ -1039,8 +1039,25 @@ class MainActivity : Activity() {
             addView(row(btServer, btAddPlaylist))
             addView(btAdv); addView(advBox)
         }
-        section(L.t("Программа передач")) { addView(label(L.t("Ссылка XMLTV"))); addView(etEpg); addView(btEpg) }
-        section(L.t("Часовой пояс телепрограммы")) { addView(label(L.t("Часовой пояс, часов от UTC"))); addView(etTz); addView(btApply) }
+        section(L.t("Программа передач")) {
+            addView(label(L.t("Ссылка XMLTV"))); addView(etEpg)
+            addView(small(tvButton(L.t("Применить ссылку EPG"))).apply {
+                setOnClickListener {
+                    prefs.edit().putString("epg", etEpg.text.toString().trim()).apply()
+                    applySource()
+                }
+            })
+            addView(btEpg)
+        }
+        section(L.t("Часовой пояс телепрограммы")) {
+            addView(label(L.t("Часовой пояс, часов от UTC"))); addView(etTz)
+            addView(small(tvButton(L.t("Применить часовой пояс"))).apply {
+                setOnClickListener {
+                    prefs.edit().putInt("tzm", Tz.parse(etTz.text.toString())).apply()
+                    applySource()
+                }
+            })
+        }
         section(L.t("Обновление")) { addView(btReload); addView(btEpg); addView(btUpd); addView(tvUpdStat); addView(tvStat) }
         section(L.t("Воспроизведение")) { addView(btType); addView(btOk); addView(btZap); addView(btSound); addView(btFindCh); addView(btSleepTimer) }
         section(L.t("Оформление")) {
@@ -2465,7 +2482,9 @@ class MainActivity : Activity() {
         toast(L.t("Загрузка плейлиста…"))
         Thread {
             try {
-                val sources = pl.split("\n").map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { listOf(pl) }
+                val stored = prefs.getString("selected_playlists", null)
+                val sourceText = stored ?: pl
+                val sources = sourceText.split("\n").map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { listOf(pl) }
                 val loaded = sources.map { repo.loadPlaylist(it) }
                 val channels = loaded.flatMap { it.list.ch }.mapIndexed { i, c -> c.apply { okey = "$name#$i" } }
                 val epgUrl = loaded.map { it.list.epgUrl }.firstOrNull { it.isNotEmpty() } ?: ""
