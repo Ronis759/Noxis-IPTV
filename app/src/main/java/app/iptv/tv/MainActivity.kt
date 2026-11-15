@@ -935,7 +935,6 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
             addView(label(L.t("Ссылка на плейлист (M3U)"))); addView(etPl)
-            addView(btApply)
         }
         btAdv = small(tvButton("")).apply { setOnClickListener { setAdvanced(advBox.visibility != View.VISIBLE) } }
 
@@ -1037,7 +1036,7 @@ class MainActivity : Activity() {
         section(L.t("Источник")) {
             addView(label(L.t("Текущий сервер"))); addView(tvSrv)
             addView(row(btServer, btAddPlaylist))
-            addView(btAdv); addView(advBox)
+            addView(btAdv); addView(advBox); addView(btApply)
         }
         section(L.t("Программа передач")) {
             addView(label(L.t("Ссылка XMLTV"))); addView(etEpg)
@@ -1058,7 +1057,7 @@ class MainActivity : Activity() {
                 }
             })
         }
-        section(L.t("Обновление")) { addView(btReload); addView(btEpg); addView(btUpd); addView(tvUpdStat); addView(tvStat) }
+        section(L.t("Обновление")) { addView(btReload); addView(btUpd); addView(tvUpdStat); addView(tvStat) }
         section(L.t("Воспроизведение")) { addView(btType); addView(btOk); addView(btZap); addView(btSound); addView(btFindCh); addView(btSleepTimer) }
         section(L.t("Оформление")) {
             addView(btLang); addView(btTheme); addView(btFont); addView(btDim)
