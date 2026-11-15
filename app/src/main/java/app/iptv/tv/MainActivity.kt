@@ -196,6 +196,7 @@ class MainActivity : Activity() {
     private var longAct = KeyAction.NONE
     private lateinit var btDim: Button
     private lateinit var dimOverlay: View
+    private var detailsDialog: FrameLayout? = null   // подробное окно передачи (полупрозрачная карточка)
     private val DIM_MIN = 30
     private val EPG_CHECK_MS = 30 * 60 * 1000L   // как часто проверять, не пора ли тихо обновить программу
     private var panelDim = 95   // непрозрачность подложки панелей (списки каналов, телепрограмма, группы, серверы), %
@@ -2020,27 +2021,71 @@ class MainActivity : Activity() {
             return
         }
         val archiveAvailable = Iptv.arcCandidates(c, p.s, p.e, ctype).isNotEmpty()
-        val text = buildString {
-            append(hm(p.s)).append("–").append(hm(p.e)).append("\n\n")
-            append(if (p.description.isNotEmpty()) p.description else L.t("Описание отсутствует"))
+        closeProgramDetails()
+        ui.removeCallbacks(hideHud); hudBox.visibility = View.GONE; seekBox.visibility = View.GONE
+
+        fun label(t: String, size: Float, color: Int, top: Int = 0) = TextView(this).apply {
+            text = t; textSize = size; setTextColor(color)
+            setPadding(0, dp(top), 0, 0)
+        }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundBg(Theme.hud)     // тот же полупрозрачный фон и скругление, что у инфобара
+            setPadding(dp(28), dp(20), dp(28), dp(20))
+            addView(label(c.name, 22f, Color.WHITE))
+            addView(label(p.title, 26f, Theme.accent, 6))
+            addView(label(hm(p.s) + "–" + hm(p.e), 18f, Theme.gray, 6))
         }
         val body = TextView(this).apply {
-            textSize = 18f
-            setTextColor(Color.WHITE)
-            setPadding(dp(20), dp(8), dp(20), dp(8))
-            this.text = text
+            text = if (p.description.isNotEmpty()) p.description else L.t("Описание отсутствует")
+            textSize = 18f; setTextColor(Color.WHITE)
+            setPadding(0, dp(14), 0, 0)
         }
-        val scroll = ScrollView(this).apply { addView(body) }
-        val builder = android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("${c.name}\n${p.title}")
-            .setView(scroll)
-            .setNegativeButton(L.t("Закрыть"), null)
+        card.addView(ScrollView(this).apply {
+            isVerticalScrollBarEnabled = true
+            addView(body)
+        }, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = dp(8) })
+
+        val buttons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+        }
+        fun actionButton(t: String) = tvButton(t).apply {
+            textSize = 18f; minHeight = dp(48); minimumHeight = dp(48)
+            setPadding(dp(20), dp(6), dp(20), dp(6))
+            gravity = Gravity.CENTER
+        }
         if (archiveAvailable) {
-            builder.setPositiveButton(L.t("Смотреть из архива")) { _, _ ->
-                playArch(p)
-            }
+            buttons.addView(actionButton(L.t("Смотреть сначала")).apply {
+                setOnClickListener { closeProgramDetails(); playArch(p) }
+            }, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(12) })
         }
-        builder.show()
+        val btClose = actionButton(L.t("Закрыть")).apply { setOnClickListener { closeProgramDetails() } }
+        buttons.addView(btClose, LinearLayout.LayoutParams(-2, -2))
+        card.addView(buttons, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
+
+        val overlay = FrameLayout(this).apply {
+            setBackgroundColor(0x66000000)   // слегка затемняем видео под карточкой
+            isFocusable = true
+            addView(card, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER).apply {
+                leftMargin = dp(40); rightMargin = dp(40)
+                val maxH = (resources.displayMetrics.heightPixels * 0.8f).toInt()
+                height = maxH; width = (resources.displayMetrics.widthPixels * 0.8f).toInt()
+            })
+            setOnClickListener { closeProgramDetails() }
+        }
+        card.setOnClickListener { /* клик по карточке не закрывает окно */ }
+        detailsDialog = overlay
+        root.addView(overlay, FrameLayout.LayoutParams(-1, -1))
+        // по умолчанию выделена «Закрыть»
+        btClose.requestFocus()
+    }
+
+    /** Закрывает подробное окно передачи, если оно открыто. */
+    private fun closeProgramDetails() {
+        val d = detailsDialog ?: return
+        detailsDialog = null
+        root.removeView(d)
     }
 
     private fun zapByList() = prefs.getString("zapm", "list") != "all"
@@ -2641,6 +2686,14 @@ class MainActivity : Activity() {
     /* ---------- пульт ---------- */
     override fun dispatchKeyEvent(e: KeyEvent): Boolean {
         val k = e.keyCode
+        // подробное окно передачи: «Назад» закрывает, остальные кнопки — как обычно внутри окна
+        if (detailsDialog != null) {
+            if (k == KeyEvent.KEYCODE_BACK) {
+                if (e.action == KeyEvent.ACTION_UP) closeProgramDetails()
+                return true
+            }
+            return super.dispatchKeyEvent(e)
+        }
         if (panelOpen()) {
             // телепрограмма рядом со списком каналов: ← из списка дней или «Назад» возвращает к выбору канала
             if (arPanel.visibility == View.VISIBLE && chPanel.visibility == View.VISIBLE &&
@@ -2803,7 +2856,7 @@ class MainActivity : Activity() {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> when {
                 numBuf.isNotEmpty() -> commitNum()
                 okInfo() && !osdVisible() -> showOsd()   // первое OK — инфобар канала, повторное — список
-                osdVisible() && arch == null -> showProgramDetails()
+                osdVisible() -> showProgramDetails()
                 else -> openChans()
             }
             KeyEvent.KEYCODE_DPAD_LEFT -> if (arch != null) seekArch(-30000) else openArch()
