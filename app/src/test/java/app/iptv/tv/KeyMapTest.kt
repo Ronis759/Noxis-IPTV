@@ -21,6 +21,7 @@ class KeyMapTest {
         assertEquals(KeyAction.SEARCH, KeyMap.resolve(KeyEvent.KEYCODE_PROG_RED, "search"))
         assertEquals(KeyAction.NONE, KeyMap.resolve(KeyEvent.KEYCODE_PROG_RED, "none"))
         assertEquals(KeyAction.FAV, KeyMap.resolve(KeyEvent.KEYCODE_PROG_RED, "bogus"))
+        assertEquals(KeyAction.LAST_CHANNEL, KeyMap.resolve(KeyEvent.KEYCODE_PROG_GREEN, "lastchannel"))
     }
 
     @Test fun dpad_arrows_are_remappable_with_configured_defaults() {

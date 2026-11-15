@@ -20,6 +20,7 @@ enum class KeyAction(val id: String, val label: String) {
     BACK30("back30", "Назад на 30 с"),
     PREV("prev", "Канал выше по списку"),
     NEXT("next", "Канал ниже по списку"),
+    LAST_CHANNEL("lastchannel", "Предыдущий просмотренный канал"),
     ARCH_BACK("archback", "Архив / назад на 30 с"),
     ARCH_FWD("archfwd", "Архив / вперёд на 30 с"),
     REWIND("rewind", "Перемотка текущей передачи назад");

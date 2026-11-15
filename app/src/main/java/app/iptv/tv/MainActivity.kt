@@ -102,6 +102,9 @@ class MainActivity : Activity() {
     private var pendingLocalPlaylistKey = ""
     private lateinit var btAdv: Button
     private lateinit var advBox: LinearLayout
+    private lateinit var btEpgSection: Button
+    private lateinit var btTzSection: Button
+    private lateinit var btEpg: Button
     // раскрывающиеся разделы настроек: заголовок-кнопка и тело раздела
     private val secTitles = ArrayList<String>()
     private val secHeads = ArrayList<Button>()
@@ -931,10 +934,74 @@ class MainActivity : Activity() {
                 }
             }
         }
+        tvStat = TextView(this).apply { textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(10), 0, 0) }
+        btEpg = small(tvButton(L.t("Обновить программу передач"))).apply {
+            setOnClickListener {
+                if (chans.isEmpty()) { toast(L.t("Сначала загрузите плейлист")) } else {
+                    toast(L.t("Загрузка программы передач…"))
+                    epgStatus = L.t("загрузка…")
+                    val tzv = Tz.parse(etTz.text.toString())
+                    prefs.edit().putString("epg", etEpg.text.toString().trim()).putInt("tzm", tzv).apply()
+                    val cs = chans; val g = loadGen
+                    Thread { loadEpgNow(cs, plEpgUrl, true, tzv, g) }.start()
+                }
+            }
+        }
+        val epgBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            addView(label(L.t("Ссылка XMLTV"))); addView(etEpg)
+            addView(small(tvButton(L.t("Применить ссылку EPG"))).apply {
+                setOnClickListener {
+                    prefs.edit().putString("epg", etEpg.text.toString().trim()).apply()
+                    applySource()
+                }
+            })
+            addView(btEpg)
+        }
+        val tzBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            addView(label(L.t("Часовой пояс, часов от UTC"))); addView(etTz)
+            addView(small(tvButton(L.t("Применить часовой пояс"))).apply {
+                setOnClickListener {
+                    prefs.edit().putInt("tzm", Tz.parse(etTz.text.toString())).apply()
+                    applySource()
+                }
+            })
+        }
+        btEpgSection = small(tvButton("")).apply {
+            text = "▸  " + L.t("Программа передач")
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            setOnClickListener {
+                val open = epgBox.visibility != View.VISIBLE
+                epgBox.visibility = if (open) View.VISIBLE else View.GONE
+                if (open) {
+                    tzBox.visibility = View.GONE
+                    btTzSection.text = "▸  " + L.t("Часовой пояс телепрограммы")
+                }
+                text = (if (open) "▾  " else "▸  ") + L.t("Программа передач")
+            }
+        }
+        btTzSection = small(tvButton("")).apply {
+            text = "▸  " + L.t("Часовой пояс телепрограммы")
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            setOnClickListener {
+                val open = tzBox.visibility != View.VISIBLE
+                tzBox.visibility = if (open) View.VISIBLE else View.GONE
+                if (open) {
+                    epgBox.visibility = View.GONE
+                    btEpgSection.text = "▸  " + L.t("Программа передач")
+                }
+                text = (if (open) "▾  " else "▸  ") + L.t("Часовой пояс телепрограммы")
+            }
+        }
         advBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
             addView(label(L.t("Ссылка на плейлист (M3U)"))); addView(etPl)
+            addView(btEpgSection); addView(epgBox)
+            addView(btTzSection); addView(tzBox)
         }
         btAdv = small(tvButton("")).apply { setOnClickListener { setAdvanced(advBox.visibility != View.VISIBLE) } }
 
@@ -1004,19 +1071,6 @@ class MainActivity : Activity() {
         }
 
         // ----- Обновление и система -----
-        tvStat = TextView(this).apply { textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(10), 0, 0) }
-        val btEpg = small(tvButton(L.t("Обновить программу передач"))).apply {
-            setOnClickListener {
-                if (chans.isEmpty()) { toast(L.t("Сначала загрузите плейлист")) } else {
-                    toast(L.t("Загрузка программы передач…"))
-                    epgStatus = L.t("загрузка…")
-                    val tzv = Tz.parse(etTz.text.toString())
-                    prefs.edit().putString("epg", etEpg.text.toString().trim()).putInt("tzm", tzv).apply()
-                    val cs = chans; val g = loadGen
-                    Thread { loadEpgNow(cs, plEpgUrl, true, tzv, g) }.start()
-                }
-            }
-        }
         btUpd = small(tvButton(L.t("Проверить обновления"))).apply { setOnClickListener { updates.check(true) } }
         tvUpdStat = TextView(this).apply { textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(8), 0, 0) }
         val btAbout = small(tvButton(L.t("О программе"))).apply { setOnClickListener { showAbout() } }
@@ -1037,25 +1091,6 @@ class MainActivity : Activity() {
             addView(label(L.t("Текущий сервер"))); addView(tvSrv)
             addView(row(btServer, btAddPlaylist))
             addView(btAdv); addView(advBox); addView(btApply)
-        }
-        section(L.t("Программа передач")) {
-            addView(label(L.t("Ссылка XMLTV"))); addView(etEpg)
-            addView(small(tvButton(L.t("Применить ссылку EPG"))).apply {
-                setOnClickListener {
-                    prefs.edit().putString("epg", etEpg.text.toString().trim()).apply()
-                    applySource()
-                }
-            })
-            addView(btEpg)
-        }
-        section(L.t("Часовой пояс телепрограммы")) {
-            addView(label(L.t("Часовой пояс, часов от UTC"))); addView(etTz)
-            addView(small(tvButton(L.t("Применить часовой пояс"))).apply {
-                setOnClickListener {
-                    prefs.edit().putInt("tzm", Tz.parse(etTz.text.toString())).apply()
-                    applySource()
-                }
-            })
         }
         section(L.t("Обновление")) { addView(btReload); addView(btUpd); addView(tvUpdStat); addView(tvStat) }
         section(L.t("Воспроизведение")) { addView(btType); addView(btOk); addView(btZap); addView(btSound); addView(btFindCh); addView(btSleepTimer) }
@@ -1518,6 +1553,7 @@ class MainActivity : Activity() {
             KeyAction.BACK30 -> if (arch != null) seekArch(-30000) else player.seekTo(maxOf(0L, player.currentPosition - 30000))
             KeyAction.PREV -> step(-1)
             KeyAction.NEXT -> step(1)
+            KeyAction.LAST_CHANNEL -> playPreviousChannel()
             KeyAction.ARCH_BACK -> if (arch != null) seekArch(-30000) else openArch()
             KeyAction.ARCH_FWD -> if (arch != null) seekArch(30000) else openArch()
             KeyAction.REWIND -> if (!rewindProg()) openArch()
@@ -1876,6 +1912,18 @@ class MainActivity : Activity() {
         history.remove(c.okey); history.add(0, c.okey)
         while (history.size > 30) history.removeAt(history.size - 1)
         prefs.edit().putString("hist", history.joinToString("\n")).apply()
+    }
+
+    /** Переключает на самый недавно просмотренный канал, отличный от текущего. */
+    private fun playPreviousChannel() {
+        val current = cur ?: return
+        val key = history.firstOrNull { it != current.okey && chans.any { c -> c.okey == it } }
+        val previous = key?.let { k -> chans.firstOrNull { it.okey == k } }
+        if (previous == null) {
+            toast(L.t("Нет предыдущего просмотренного канала"))
+            return
+        }
+        playChan(previous)
     }
 
     private fun arcKey(c: Channel, p: Prog) = c.okey + "@" + p.s
