@@ -92,13 +92,14 @@ class MainActivity : Activity() {
     private lateinit var btType: Button
     private lateinit var btSort: Button
     private lateinit var httpFactory: DefaultHttpDataSource.Factory
-    private lateinit var etUa: EditText
     private lateinit var srvPanel: LinearLayout
     private lateinit var srvList: ListView
     private lateinit var tvStat: TextView
     private lateinit var tvSrv: TextView
     private lateinit var btServer: Button
     private lateinit var btAddPlaylist: Button
+    private var pendingLocalPlaylistName = ""
+    private var pendingLocalPlaylistKey = ""
     private lateinit var btAdv: Button
     private lateinit var advBox: LinearLayout
     // раскрывающиеся разделы настроек: заголовок-кнопка и тело раздела
@@ -906,7 +907,6 @@ class MainActivity : Activity() {
         etPl = field("http://…/playlist.m3u")
         etEpg = field(L.t("пусто = адрес из плейлиста (url-tvg)"))
         etTz = field(L.t("0, 3, 5.5 или 5:30")).apply { inputType = InputType.TYPE_CLASS_TEXT }
-        etUa = field(L.t("пусто = автоподбор (VLC, okhttp, Mozilla…)"))
 
         // ----- Источник -----
         tvSrv = TextView(this).apply {
@@ -915,9 +915,8 @@ class MainActivity : Activity() {
         }
         btServer = small(tvButton(L.t("⇄ Выбрать сервер"))).apply { setOnClickListener { openServers() } }
         btAddPlaylist = small(tvButton(L.t("＋ Добавить плейлист"))).apply {
-            setOnClickListener { addCurrentPlaylist() }
+            setOnClickListener { showAddPlaylistDialog() }
         }
-        val btFile = small(tvButton(L.t("Загрузить файл…"))).apply { setOnClickListener { pickFile() } }
         val btReload = small(tvButton(L.t("Обновить плейлист"))).apply {
             setOnClickListener { if (applySource(true) == 2) closePanels() }
         }
@@ -936,9 +935,6 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
             addView(label(L.t("Ссылка на плейлист (M3U)"))); addView(etPl)
-            addView(label(L.t("Программа передач (XMLTV)"))); addView(etEpg)
-            addView(label(L.t("User-Agent (если сервер отвечает 403)"))); addView(etUa)
-            addView(label(L.t("Часовой пояс программы, ч от UTC (если не указан в EPG)"))); addView(etTz)
             addView(btApply)
         }
         btAdv = small(tvButton("")).apply { setOnClickListener { setAdvanced(advBox.visibility != View.VISIBLE) } }
@@ -1041,9 +1037,10 @@ class MainActivity : Activity() {
         section(L.t("Источник")) {
             addView(label(L.t("Текущий сервер"))); addView(tvSrv)
             addView(row(btServer, btAddPlaylist))
-            addView(btFile, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
             addView(btAdv); addView(advBox)
         }
+        section(L.t("Программа передач")) { addView(label(L.t("Ссылка XMLTV"))); addView(etEpg); addView(btEpg) }
+        section(L.t("Часовой пояс телепрограммы")) { addView(label(L.t("Часовой пояс, часов от UTC"))); addView(etTz); addView(btApply) }
         section(L.t("Обновление")) { addView(btReload); addView(btEpg); addView(btUpd); addView(tvUpdStat); addView(tvStat) }
         section(L.t("Воспроизведение")) { addView(btType); addView(btOk); addView(btZap); addView(btSound); addView(btFindCh); addView(btSleepTimer) }
         section(L.t("Оформление")) {
@@ -1533,7 +1530,6 @@ class MainActivity : Activity() {
         etPl.setText(pl)
         etEpg.setText(prefs.getString("epg", "") ?: "")
         etTz.setText(Tz.format(tzMin()))
-        etUa.setText(prefs.getString("ua", ""))
         tvSrv.text = srvLabel()
         btType.text = typeLabel()
         btSort.text = L.f("Порядок каналов: {0}", L.t(sortNames[sortMode].orEmpty()))
@@ -1560,7 +1556,7 @@ class MainActivity : Activity() {
         val ed = prefs.edit()
         if (newPl != (prefs.getString("pl", "") ?: "")) ed.remove("srvn")   // адрес изменили вручную — имя сервера уже не то
         ed.putString("pl", newPl).putString("epg", etEpg.text.toString().trim())
-            .putInt("tzm", Tz.parse(etTz.text.toString())).putString("ct", ctype).putString("ua", etUa.text.toString().trim()).apply()
+            .putInt("tzm", Tz.parse(etTz.text.toString())).putString("ct", ctype).apply()
     }
 
     private fun langPref() = prefs.getString("lang", "auto") ?: "auto"
@@ -1612,18 +1608,12 @@ class MainActivity : Activity() {
         val oldPl = prefs.getString("pl", "") ?: ""
         val oldEpg = prefs.getString("epg", "") ?: ""
         val oldTz = tzMin()
-        val oldUa = prefs.getString("ua", "") ?: ""
         val newPl = etPl.text.toString().trim()
         val newEpg = etEpg.text.toString().trim()
         val newTz = Tz.parse(etTz.text.toString())
-        val newUa = etUa.text.toString().trim()
         val ed = prefs.edit()
         if (newPl != oldPl) ed.remove("srvn")   // адрес изменили вручную — имя сервера уже не то
-        ed.putString("pl", newPl).putString("epg", newEpg).putInt("tzm", newTz).putString("ct", ctype).putString("ua", newUa).apply()
-        if (newUa != oldUa) {
-            Iptv.customUa = newUa
-            httpFactory.setUserAgent(newUa.ifEmpty { Iptv.goodUa ?: Iptv.DEFAULT_UA })
-        }
+        ed.putString("pl", newPl).putString("epg", newEpg).putInt("tzm", newTz).apply()
         if (newPl.isNotEmpty() && (newPl != oldPl || forcePlaylist || chans.isEmpty())) { loadAll(false); return 2 }
         if (chans.isNotEmpty() && (newEpg != oldEpg || newTz != oldTz)) {
             toast(L.t("Загрузка программы передач…"))
@@ -2038,26 +2028,42 @@ class MainActivity : Activity() {
     }
 
     /** Добавляет текущий адрес в список плейлистов, не заменяя уже сохранённые. */
-    private fun addCurrentPlaylist() {
-        val pl = etPl.text.toString().trim()
-        if (pl.isEmpty()) { toast(L.t("Сначала укажите ссылку на плейлист")); return }
-        val epg = etEpg.text.toString().trim()
-        val input = EditText(this).apply { hint = L.t("Например: Домашний") }
-        val name = android.app.AlertDialog.Builder(this)
-            .setTitle(L.t("Название плейлиста"))
-            .setView(input)
-            .setNegativeButton(L.t("Отмена"), null)
-            .create()
-        name.setButton(android.app.AlertDialog.BUTTON_POSITIVE, L.t("Добавить")) { _, _ ->
-            val n = input.text.toString().trim().ifEmpty { Iptv.hostOf(pl) }
-            val old = prefs.getString("saved_playlists", "") ?: ""
-            val line = listOf(n, pl, epg).joinToString("\t").replace("\n", " ")
-            val lines = old.split("\n").filter { it.isNotEmpty() && it.split("\t").getOrNull(1) != pl }.toMutableList()
-            lines.add(line)
-            prefs.edit().putString("saved_playlists", lines.joinToString("\n")).apply()
-            toast(L.t("Плейлист добавлен"))
+    private fun showAddPlaylistDialog() {
+        val name = EditText(this).apply { hint = L.t("Название плейлиста") }
+        val url = EditText(this).apply { hint = L.t("Ссылка на M3U (необязательно)") }
+        val pick = tvButton(L.t("Выбрать локальный файл…")).apply {
+            setOnClickListener {
+                pendingLocalPlaylistName = name.text.toString().trim()
+                pendingLocalPlaylistKey = "local:" + System.currentTimeMillis().toString(36)
+                pickFile()
+            }
         }
-        name.show()
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0)
+            addView(name); addView(url); addView(pick)
+        }
+        android.app.AlertDialog.Builder(this).setTitle(L.t("Добавить плейлист")).setView(box)
+            .setNegativeButton(L.t("Закрыть"), null)
+            .setPositiveButton(L.t("Сохранить ссылку"), null)
+            .create().also { d ->
+                d.setOnShowListener {
+                    d.getButton(-1).setOnClickListener {
+                        val address = url.text.toString().trim()
+                        if (address.isEmpty()) { toast(L.t("Введите ссылку или выберите локальный файл")); return@setOnClickListener }
+                        val title = name.text.toString().trim().ifEmpty { Iptv.hostOf(address) }
+                        savePlaylist(title, address, "")
+                        toast(L.t("Плейлист добавлен")); d.dismiss()
+                    }
+                }
+                d.show()
+            }
+    }
+
+    private fun savePlaylist(name: String, pl: String, epg: String) {
+        val old = prefs.getString("saved_playlists", "") ?: ""
+        val lines = old.split("\n").filter { it.isNotEmpty() && it.split("\t").getOrNull(1) != pl }.toMutableList()
+        lines.add(listOf(name, pl, epg).joinToString("\t").replace("\n", " "))
+        prefs.edit().putString("saved_playlists", lines.joinToString("\n")).apply()
     }
 
     private fun savedPlaylists(): List<Server> =
@@ -2109,6 +2115,22 @@ class MainActivity : Activity() {
     private fun openServers() {
         val l = (repo.servers() + savedPlaylists()).distinctBy { it.pl }
         if (l.isEmpty()) { toast(L.t("Список серверов пуст. Загрузите servers.txt кнопкой «Загрузить файл…»")); openSetup(); return }
+        val selected = l.map { it.pl in selectedPlaylists() }.toBooleanArray()
+        android.app.AlertDialog.Builder(this)
+            .setTitle(L.t("Выберите плейлисты"))
+            .setMultiChoiceItems(l.map { it.name }.toTypedArray(), selected) { _, which, checked -> selected[which] = checked }
+            .setNegativeButton(L.t("Отмена"), null)
+            .setPositiveButton(L.t("Загрузить")) { _, _ ->
+                val chosen = l.filterIndexed { i, _ -> selected[i] }
+                if (chosen.isNotEmpty()) {
+                    val urls = chosen.joinToString("\n") { it.pl }
+                    prefs.edit().putString("selected_playlists", urls).putString("pl", urls).putString("srvn", chosen.joinToString(", ") { it.name }).apply()
+                    etPl.setText(urls)
+                    loadAll(false)
+                }
+            }.show()
+        return
+        /*
         srvBackToSetup = setup.visibility == View.VISIBLE
         val act = prefs.getString("srvn", "") ?: ""
         ad(srvList).active = act
@@ -2116,7 +2138,11 @@ class MainActivity : Activity() {
         showPanel(srvPanel)
         srvList.setSelection(l.indexOfFirst { it.name == act }.coerceAtLeast(0))
         srvList.requestFocus()
+        */
     }
+
+    private fun selectedPlaylists(): Set<String> =
+        (prefs.getString("selected_playlists", "") ?: "").split("\n").filter { it.isNotBlank() }.toSet()
 
     private fun pickFile() {
         try {
@@ -2371,10 +2397,14 @@ class MainActivity : Activity() {
                     val bytes = (contentResolver.openInputStream(u) ?: throw IOException(L.t("нет доступа к файлу")))
                         .use { Iptv.readLimited(it, Iptv.MAX_PLAYLIST) }
                     val t = Iptv.text(bytes)
-                    val isPlaylist = repo.importText(t)
+                      val isPlaylist = repo.importText(t, pendingLocalPlaylistKey.ifEmpty { "local" })
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
-                        if (isPlaylist) { closePanels(); loadAll(false) }
+                          if (isPlaylist) {
+                              if (pendingLocalPlaylistName.isNotEmpty()) savePlaylist(pendingLocalPlaylistName, pendingLocalPlaylistKey.ifEmpty { "local" }, "")
+                              pendingLocalPlaylistName = ""; pendingLocalPlaylistKey = ""
+                              closePanels(); loadAll(false)
+                          }
                         else if (Iptv.parseServers(t).isEmpty()) toast(L.t("В файле нет адресов. Формат: Название | http://… | EPG"))
                         else openServers()
                     }
@@ -2435,18 +2465,20 @@ class MainActivity : Activity() {
         toast(L.t("Загрузка плейлиста…"))
         Thread {
             try {
-                val loaded = repo.loadPlaylist(pl)
-                val list = loaded.list
-                val fromCache = loaded.fromCache
+                val sources = pl.split("\n").map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { listOf(pl) }
+                val loaded = sources.map { repo.loadPlaylist(it) }
+                val channels = loaded.flatMap { it.list.ch }.mapIndexed { i, c -> c.apply { okey = "$name#$i" } }
+                val epgUrl = loaded.map { it.list.epgUrl }.firstOrNull { it.isNotEmpty() } ?: ""
+                val fromCache = loaded.any { it.fromCache }
                 if (gen != loadGen) return@Thread
                 runOnUiThread {
                     if (gen != loadGen || isFinishing || isDestroyed) return@runOnUiThread
-                    applyChannels(list.ch, if (fromCache) L.f("Сервер недоступен — показан сохранённый список: {0}", list.ch.size) else L.f("Каналов: {0}", list.ch.size))
-                    Session.chans = chans; Session.groups = groups; Session.pl = pl; Session.plEpgUrl = list.epgUrl
+                    applyChannels(channels, if (fromCache) L.f("Сервер недоступен — показан сохранённый список: {0}", channels.size) else L.f("Каналов: {0}", channels.size))
+                    Session.chans = chans; Session.groups = groups; Session.pl = pl; Session.plEpgUrl = epgUrl
                 }
                 if (gen != loadGen) return@Thread
-                plEpgUrl = list.epgUrl
-                loadEpgNow(list.ch, list.epgUrl, force, tz, gen)
+                plEpgUrl = epgUrl
+                loadEpgNow(channels, epgUrl, force, tz, gen)
             } catch (e: Exception) {
                 runOnUiThread { if (gen == loadGen) { toast(L.t("Ошибка: ") + Iptv.safeMsg(e)); if (chans.isEmpty()) openSetup() } }
             }

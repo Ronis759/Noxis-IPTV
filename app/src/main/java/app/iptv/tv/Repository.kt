@@ -39,11 +39,11 @@ class Repository(private val ctx: Context, private val prefs: SharedPreferences)
      * Сохраняет выбранный пользователем файл: плейлист (есть #EXTINF) — как локальный, иначе — как servers.txt.
      * Читать и писать нужно из фонового потока. true — это был плейлист.
      */
-    fun importText(t: String): Boolean {
+    fun importText(t: String, key: String = "local"): Boolean {
         val isPlaylist = t.contains("#EXTINF")
         if (isPlaylist) {
-            File(ctx.filesDir, "local.m3u").writeText(t)
-            prefs.edit().putString("pl", "local").remove("srvn").apply()
+            File(ctx.filesDir, if (key == "local") "local.m3u" else "local_" + key + ".m3u").writeText(t)
+            prefs.edit().putString("pl", key).remove("srvn").apply()
         } else {
             File(ctx.filesDir, "servers.txt").writeText(t)
         }
@@ -56,6 +56,7 @@ class Repository(private val ctx: Context, private val prefs: SharedPreferences)
         val f = File(ctx.filesDir, "pl_" + Integer.toHexString(pl.hashCode()) + ".m3u")
         var cached = false
         val txt = if (pl == "local") File(ctx.filesDir, "local.m3u").readText()
+        else if (pl.startsWith("local:")) File(ctx.filesDir, "local_" + pl.removePrefix("local:") + ".m3u").readText()
         else try { Iptv.text(Iptv.http(pl)).also { f.writeText(it) } }
         catch (e: Exception) { if (f.exists()) { cached = true; f.readText() } else throw e }
         val list = Iptv.parseM3u(txt)
