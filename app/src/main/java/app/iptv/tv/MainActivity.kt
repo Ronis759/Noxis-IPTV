@@ -102,6 +102,9 @@ class MainActivity : Activity() {
     private var pendingLocalPlaylistKey = ""
     private lateinit var btAdv: Button
     private lateinit var advBox: LinearLayout
+    private lateinit var btEpg: Button
+    private lateinit var btEpgSection: Button
+    private lateinit var btTzSection: Button
     // раскрывающиеся разделы настроек: заголовок-кнопка и тело раздела
     private val secTitles = ArrayList<String>()
     private val secHeads = ArrayList<Button>()
@@ -931,10 +934,55 @@ class MainActivity : Activity() {
                 }
             }
         }
+        val epgBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            addView(label(L.t("Ссылка XMLTV"))); addView(etEpg)
+            addView(small(tvButton(L.t("Применить ссылку EPG"))).apply {
+                setOnClickListener {
+                    prefs.edit().putString("epg", etEpg.text.toString().trim()).apply()
+                    applySource()
+                }
+            })
+            addView(btEpg)
+        }
+        val tzBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            addView(label(L.t("Часовой пояс, часов от UTC"))); addView(etTz)
+            addView(small(tvButton(L.t("Применить часовой пояс"))).apply {
+                setOnClickListener {
+                    prefs.edit().putInt("tzm", Tz.parse(etTz.text.toString())).apply()
+                    applySource()
+                }
+            })
+        }
+        btEpgSection = small(tvButton("")).apply {
+            text = "▸  " + L.t("Программа передач")
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            setOnClickListener {
+                val open = epgBox.visibility != View.VISIBLE
+                epgBox.visibility = if (open) View.VISIBLE else View.GONE
+                if (open) { tzBox.visibility = View.GONE; btTzSection.text = "▸  " + L.t("Часовой пояс телепрограммы") }
+                text = (if (open) "▾  " else "▸  ") + L.t("Программа передач")
+            }
+        }
+        btTzSection = small(tvButton("")).apply {
+            text = "▸  " + L.t("Часовой пояс телепрограммы")
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            setOnClickListener {
+                val open = tzBox.visibility != View.VISIBLE
+                tzBox.visibility = if (open) View.VISIBLE else View.GONE
+                if (open) { epgBox.visibility = View.GONE; btEpgSection.text = "▸  " + L.t("Программа передач") }
+                text = (if (open) "▾  " else "▸  ") + L.t("Часовой пояс телепрограммы")
+            }
+        }
         advBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
             addView(label(L.t("Ссылка на плейлист (M3U)"))); addView(etPl)
+            addView(btEpgSection); addView(epgBox)
+            addView(btTzSection); addView(tzBox)
         }
         btAdv = small(tvButton("")).apply { setOnClickListener { setAdvanced(advBox.visibility != View.VISIBLE) } }
 
@@ -1005,7 +1053,7 @@ class MainActivity : Activity() {
 
         // ----- Обновление и система -----
         tvStat = TextView(this).apply { textSize = 13f; setTextColor(gray); setPadding(dp(2), dp(10), 0, 0) }
-        val btEpg = small(tvButton(L.t("Обновить программу передач"))).apply {
+        btEpg = small(tvButton(L.t("Обновить программу передач"))).apply {
             setOnClickListener {
                 if (chans.isEmpty()) { toast(L.t("Сначала загрузите плейлист")) } else {
                     toast(L.t("Загрузка программы передач…"))
@@ -1037,25 +1085,6 @@ class MainActivity : Activity() {
             addView(label(L.t("Текущий сервер"))); addView(tvSrv)
             addView(row(btServer, btAddPlaylist))
             addView(btAdv); addView(advBox); addView(btApply)
-        }
-        section(L.t("Программа передач")) {
-            addView(label(L.t("Ссылка XMLTV"))); addView(etEpg)
-            addView(small(tvButton(L.t("Применить ссылку EPG"))).apply {
-                setOnClickListener {
-                    prefs.edit().putString("epg", etEpg.text.toString().trim()).apply()
-                    applySource()
-                }
-            })
-            addView(btEpg)
-        }
-        section(L.t("Часовой пояс телепрограммы")) {
-            addView(label(L.t("Часовой пояс, часов от UTC"))); addView(etTz)
-            addView(small(tvButton(L.t("Применить часовой пояс"))).apply {
-                setOnClickListener {
-                    prefs.edit().putInt("tzm", Tz.parse(etTz.text.toString())).apply()
-                    applySource()
-                }
-            })
         }
         section(L.t("Обновление")) { addView(btReload); addView(btUpd); addView(tvUpdStat); addView(tvStat) }
         section(L.t("Воспроизведение")) { addView(btType); addView(btOk); addView(btZap); addView(btSound); addView(btFindCh); addView(btSleepTimer) }
