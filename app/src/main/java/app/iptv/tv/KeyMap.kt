@@ -45,9 +45,9 @@ object KeyMap {
     class Btn(val code: Int, val name: String, val def: KeyAction)
 
     val buttons: List<Btn> = listOf(
-        Btn(KeyEvent.KEYCODE_DPAD_UP, "Джойстик ↑", KeyAction.PREV),
-        Btn(KeyEvent.KEYCODE_DPAD_DOWN, "Джойстик ↓", KeyAction.NEXT),
-        Btn(KeyEvent.KEYCODE_DPAD_LEFT, "Джойстик ←", KeyAction.ARCH_BACK),
+        Btn(KeyEvent.KEYCODE_DPAD_UP, "Джойстик ↑", KeyAction.NEXT),
+        Btn(KeyEvent.KEYCODE_DPAD_DOWN, "Джойстик ↓", KeyAction.PREV),
+        Btn(KeyEvent.KEYCODE_DPAD_LEFT, "Джойстик ←", KeyAction.CHANNELS),
         Btn(KeyEvent.KEYCODE_DPAD_RIGHT, "Джойстик →", KeyAction.ARCH_FWD),
         Btn(KeyEvent.KEYCODE_PROG_RED, "Красная", KeyAction.FAV),
         Btn(KeyEvent.KEYCODE_PROG_GREEN, "Зелёная", KeyAction.NONE),
