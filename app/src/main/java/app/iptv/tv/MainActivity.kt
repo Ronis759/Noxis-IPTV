@@ -198,6 +198,7 @@ class MainActivity : Activity() {
     private lateinit var dimOverlay: View
     private var detailsDialog: FrameLayout? = null   // подробное окно передачи (полупрозрачная карточка)
     private var detailsProg: Prog? = null            // передача, показанная в подробном окне
+    private var detailsBrowse = false                // true — включено листание архива стрелками
     private val DIM_MIN = 30
     private val EPG_CHECK_MS = 30 * 60 * 1000L   // как часто проверять, не пора ли тихо обновить программу
     private var panelDim = 95   // непрозрачность подложки панелей (списки каналов, телепрограмма, группы, серверы), %
@@ -2015,7 +2016,7 @@ class MainActivity : Activity() {
     private fun showOsd() { if (arch != null) showSeek() else hud() }
 
     /** Подробности текущей передачи из EPG. Открывается повторным нажатием OK после инфобара. */
-    private fun showProgramDetails(prog: Prog? = null) {
+    private fun showProgramDetails(prog: Prog? = null, browse: Boolean = detailsBrowse) {
         val c = cur ?: return
         val p = prog ?: arch ?: nowProg(c) ?: run {
             toast(L.t("Для текущего канала нет программы передач"))
@@ -2025,6 +2026,7 @@ class MainActivity : Activity() {
         val archive = archivedPrograms(c, p)
         closeProgramDetails()
         detailsProg = p
+        detailsBrowse = browse
         ui.removeCallbacks(hideHud); hudBox.visibility = View.GONE; seekBox.visibility = View.GONE
 
         fun label(t: String, size: Float, color: Int, top: Int = 0) = TextView(this).apply {
@@ -2038,7 +2040,10 @@ class MainActivity : Activity() {
             addView(label(c.name, 22f, Color.WHITE))
             addView(label(p.title, 26f, Theme.accent, 6))
             addView(label(hm(p.s) + "–" + hm(p.e), 18f, Theme.gray, 6))
-            if (archive.size > 1) addView(label("◄ ► — " + L.t("другие передачи архива"), 14f, Theme.gray, 6))
+            if (archive.size > 1) addView(label(
+                if (browse) "◄ ► — " + L.t("другие передачи архива") else "▲ — " + L.t("листать передачи архива"),
+                14f, Theme.gray, 6
+            ))
         }
         val body = TextView(this).apply {
             text = if (p.description.isNotEmpty()) p.description else L.t("Описание отсутствует")
@@ -2060,7 +2065,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
         }
         if (archiveAvailable) {
-            buttons.addView(actionButton(L.t("Смотреть сначала")).apply {
+            buttons.addView(actionButton("▶ " + L.t("Смотреть")).apply {
                 setOnClickListener { closeProgramDetails(); playArch(p) }
             }, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(12) })
         }
@@ -2090,6 +2095,7 @@ class MainActivity : Activity() {
         val d = detailsDialog ?: return
         detailsDialog = null
         detailsProg = null
+        detailsBrowse = false
         root.removeView(d)
     }
 
@@ -2113,7 +2119,7 @@ class MainActivity : Activity() {
             toast(if (dir < 0) L.t("Раньше передач в архиве нет") else L.t("Позже передач в архиве нет"))
             return
         }
-        showProgramDetails(l[j])
+        showProgramDetails(l[j], true)
     }
 
     private fun zapByList() = prefs.getString("zapm", "list") != "all"
@@ -2720,7 +2726,17 @@ class MainActivity : Activity() {
                 if (e.action == KeyEvent.ACTION_UP) closeProgramDetails()
                 return true
             }
-            if (k == KeyEvent.KEYCODE_DPAD_LEFT || k == KeyEvent.KEYCODE_DPAD_RIGHT) {
+            if (k == KeyEvent.KEYCODE_DPAD_UP || k == KeyEvent.KEYCODE_PAGE_UP) {
+                if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0 && !detailsBrowse) {
+                    val p = detailsProg
+                    if (p != null && archivedPrograms(cur ?: return true, p).size > 1) {
+                        detailsBrowse = true
+                        showProgramDetails(p, true)
+                    } else toast(L.t("В архиве нет других передач"))
+                }
+                return true
+            }
+            if (detailsBrowse && (k == KeyEvent.KEYCODE_DPAD_LEFT || k == KeyEvent.KEYCODE_DPAD_RIGHT)) {
                 if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) stepDetails(if (k == KeyEvent.KEYCODE_DPAD_LEFT) -1 else 1)
                 return true
             }
@@ -2887,6 +2903,7 @@ class MainActivity : Activity() {
         when (k) {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> when {
                 numBuf.isNotEmpty() -> commitNum()
+                arch != null -> { player.playWhenReady = !player.playWhenReady; showSeek() }
                 okInfo() && !osdVisible() -> showOsd()   // первое OK — инфобар канала, повторное — список
                 osdVisible() -> showProgramDetails()
                 else -> openChans()
