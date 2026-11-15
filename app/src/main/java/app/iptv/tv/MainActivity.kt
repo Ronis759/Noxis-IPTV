@@ -2012,6 +2012,37 @@ class MainActivity : Activity() {
     /** Инфобар канала с полосой прогресса передачи; в архиве — панель перемотки с позицией воспроизведения. */
     private fun showOsd() { if (arch != null) showSeek() else hud() }
 
+    /** Подробности текущей передачи из EPG. Открывается повторным нажатием OK после инфобара. */
+    private fun showProgramDetails() {
+        val c = cur ?: return
+        val p = arch ?: nowProg(c) ?: run {
+            toast(L.t("Для текущего канала нет программы передач"))
+            return
+        }
+        val archiveAvailable = Iptv.arcCandidates(c, p.s, p.e, ctype).isNotEmpty()
+        val text = buildString {
+            append(hm(p.s)).append("–").append(hm(p.e)).append("\n\n")
+            append(if (p.description.isNotEmpty()) p.description else L.t("Описание отсутствует"))
+        }
+        val body = TextView(this).apply {
+            textSize = 18f
+            setTextColor(Color.WHITE)
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+            this.text = text
+        }
+        val scroll = ScrollView(this).apply { addView(body) }
+        val builder = android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("${c.name}\n${p.title}")
+            .setView(scroll)
+            .setNegativeButton(L.t("Закрыть"), null)
+        if (archiveAvailable) {
+            builder.setPositiveButton(L.t("Смотреть из архива")) { _, _ ->
+                playArch(p)
+            }
+        }
+        builder.show()
+    }
+
     private fun zapByList() = prefs.getString("zapm", "list") != "all"
 
     private fun zapLabel() = L.t("Листать ↑/↓: ") + if (zapByList()) L.t("по выбранному списку (группа, избранное)") else L.t("по всем каналам, по порядку номеров")
@@ -2772,6 +2803,7 @@ class MainActivity : Activity() {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> when {
                 numBuf.isNotEmpty() -> commitNum()
                 okInfo() && !osdVisible() -> showOsd()   // первое OK — инфобар канала, повторное — список
+                osdVisible() && arch == null -> showProgramDetails()
                 else -> openChans()
             }
             KeyEvent.KEYCODE_DPAD_LEFT -> if (arch != null) seekArch(-30000) else openArch()

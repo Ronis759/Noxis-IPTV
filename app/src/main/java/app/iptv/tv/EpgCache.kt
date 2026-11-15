@@ -24,19 +24,19 @@ object EpgCache {
      * не стирала программу. [src] — время изменения исходного файла.
      */
     fun save(cf: File, key: String, src: Long, chKeys: List<String>, eids: List<String>, map: Map<String, List<Prog>>) {
-        val titles = LinkedHashMap<String, Int>()
-        for (l in map.values) for (p in l) titles.getOrPut(p.title) { titles.size }
+        val texts = LinkedHashMap<String, Int>()
+        for (l in map.values) for (p in l) texts.getOrPut(p.title + "\u0000" + p.description) { texts.size }
         // пишем во временный файл и переименовываем: прерванная запись не должна испортить рабочий кэш
         val tmp = File(cf.parentFile, cf.name + ".tmp")
         try {
             DataOutputStream(BufferedOutputStream(FileOutputStream(tmp), 65536)).use { o ->
                 o.writeUTF(key); o.writeLong(src)
                 o.writeInt(chKeys.size); for (i in chKeys.indices) { o.writeUTF(chKeys[i]); o.writeUTF(eids[i]) }
-                o.writeInt(titles.size); titles.keys.forEach { o.writeUTF(it) }
+                o.writeInt(texts.size); texts.keys.forEach { o.writeUTF(it) }
                 o.writeInt(map.size)
                 for ((id, l) in map) {
                     o.writeUTF(id); o.writeInt(l.size)
-                    for (p in l) { o.writeLong(p.s); o.writeLong(p.e); o.writeInt(titles[p.title]!!) }
+                    for (p in l) { o.writeLong(p.s); o.writeLong(p.e); o.writeInt(texts[p.title + "\u0000" + p.description]!!) }
                 }
             }
             if (!tmp.renameTo(cf)) {
@@ -58,11 +58,16 @@ object EpgCache {
             val n = i.readInt()
             val keys = ArrayList<String>(n); val eids = ArrayList<String>(n)
             repeat(n) { keys.add(i.readUTF()); eids.add(i.readUTF()) }
-            val titles = List(i.readInt()) { i.readUTF() }
+            val texts = List(i.readInt()) { i.readUTF() }
             val map = HashMap<String, List<Prog>>()
             repeat(i.readInt()) {
                 val id = i.readUTF()
-                map[id] = List(i.readInt()) { Prog(i.readLong(), i.readLong(), titles[i.readInt()]) }
+                map[id] = List(i.readInt()) {
+                    val s = i.readLong()
+                    val e = i.readLong()
+                    val parts = texts[i.readInt()].split("\u0000", limit = 2)
+                    Prog(s, e, parts[0], parts.getOrElse(1) { "" })
+                }
             }
             return Data(src, keys, eids, map)
         }

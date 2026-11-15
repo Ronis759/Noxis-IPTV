@@ -28,7 +28,7 @@ class Channel(
     var okey: String = name
 }
 
-class Prog(val s: Long, val e: Long, val title: String)
+class Prog(val s: Long, val e: Long, val title: String, val description: String = "")
 class Playlist(val ch: List<Channel>, val epgUrl: String)
 class HttpCodeException(val code: Int) : IOException("HTTP $code")
 /** Ответ больше допустимого размера (защита от огромных плейлистов, логотипов и «gzip-бомб»). */
@@ -380,7 +380,7 @@ object Iptv {
         val hi = nowS + 3 * 86400L   // запас вперёд: программа не кончается, даже если сеть пропала на пару дней
         var wanted: Set<String>? = null
         var chId = ""; var inCh = false; var pch = ""
-        var s = 0L; var e = 0L; var title = ""; var inProg = false
+        var s = 0L; var e = 0L; var title = ""; var description = ""; var inProg = false
         var ev = p.eventType
         while (ev != XmlPullParser.END_DOCUMENT) {
             if (ev == XmlPullParser.START_TAG) {
@@ -400,12 +400,13 @@ object Iptv {
                             val tmp = Epg(map, names, ids)
                             wanted = chans.mapNotNullTo(HashSet<String>()) { c -> matchEid(tmp, c).takeIf { it.isNotEmpty() } }
                         }
-                        inProg = true; title = ""
+                        inProg = true; title = ""; description = ""
                         pch = p.getAttributeValue(null, "channel") ?: ""
                         s = xt(p.getAttributeValue(null, "start"), tz)
                         e = xt(p.getAttributeValue(null, "stop"), tz)
                     }
                     "title" -> if (inProg && title.isEmpty()) title = p.nextText().trim()
+                    "desc" -> if (inProg && description.isEmpty()) description = p.nextText().trim()
                 }
             } else if (ev == XmlPullParser.END_TAG) {
                 when (p.name) {
@@ -414,7 +415,7 @@ object Iptv {
                         val w = wanted
                         if (inProg && e > s && e > lo && s < hi && (w == null || pch in w)) {
                             val t = titles.getOrPut(title) { title }
-                            map.getOrPut(pch) { ArrayList() }.add(Prog(s, e, t))
+                            map.getOrPut(pch) { ArrayList() }.add(Prog(s, e, t, description))
                         }
                         inProg = false
                     }
