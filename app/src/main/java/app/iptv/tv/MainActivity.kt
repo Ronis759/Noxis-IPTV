@@ -199,6 +199,7 @@ class MainActivity : Activity() {
     private var detailsDialog: FrameLayout? = null   // подробное окно передачи (полупрозрачная карточка)
     private var detailsProg: Prog? = null            // передача, показанная в подробном окне
     private var detailsBrowse = false                // true — включено листание архива стрелками
+    private var detailsPlay: Button? = null          // кнопка «Смотреть» в подробном окне
     private val DIM_MIN = 30
     private val EPG_CHECK_MS = 30 * 60 * 1000L   // как часто проверять, не пора ли тихо обновить программу
     private var panelDim = 95   // непрозрачность подложки панелей (списки каналов, телепрограмма, группы, серверы), %
@@ -2065,9 +2066,13 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
         }
         if (archiveAvailable) {
-            buttons.addView(actionButton("▶ " + L.t("Смотреть")).apply {
+            val btPlay = actionButton("▶ " + L.t("Смотреть")).apply {
                 setOnClickListener { closeProgramDetails(); playArch(p) }
-            }, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(12) })
+            }
+            detailsPlay = btPlay
+            buttons.addView(btPlay, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(12) })
+        } else {
+            detailsPlay = null
         }
         val btClose = actionButton(L.t("Закрыть")).apply { setOnClickListener { closeProgramDetails() } }
         buttons.addView(btClose, LinearLayout.LayoutParams(-2, -2))
@@ -2096,6 +2101,7 @@ class MainActivity : Activity() {
         detailsDialog = null
         detailsProg = null
         detailsBrowse = false
+        detailsPlay = null
         root.removeView(d)
     }
 
@@ -2738,6 +2744,14 @@ class MainActivity : Activity() {
             }
             if (detailsBrowse && (k == KeyEvent.KEYCODE_DPAD_LEFT || k == KeyEvent.KEYCODE_DPAD_RIGHT)) {
                 if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) stepDetails(if (k == KeyEvent.KEYCODE_DPAD_LEFT) -1 else 1)
+                return true
+            }
+            // вниз — фокус на кнопку «Смотреть» выбранной передачи архива
+            if (k == KeyEvent.KEYCODE_DPAD_DOWN || k == KeyEvent.KEYCODE_PAGE_DOWN) {
+                if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) {
+                    val b = detailsPlay
+                    if (b != null) b.requestFocus() else toast(L.t("Эта передача недоступна в архиве"))
+                }
                 return true
             }
             return super.dispatchKeyEvent(e)
