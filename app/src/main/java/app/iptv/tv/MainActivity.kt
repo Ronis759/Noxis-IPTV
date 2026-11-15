@@ -1547,6 +1547,7 @@ class MainActivity : Activity() {
             KeyAction.BACK30 -> if (arch != null) seekArch(-30000) else player.seekTo(maxOf(0L, player.currentPosition - 30000))
             KeyAction.PREV -> step(-1)
             KeyAction.NEXT -> step(1)
+            KeyAction.LAST_CHANNEL -> playPreviousChannel()
             KeyAction.ARCH_BACK -> if (arch != null) seekArch(-30000) else openArch()
             KeyAction.ARCH_FWD -> if (arch != null) seekArch(30000) else openArch()
             KeyAction.REWIND -> if (!rewindProg()) openArch()
@@ -1905,6 +1906,18 @@ class MainActivity : Activity() {
         history.remove(c.okey); history.add(0, c.okey)
         while (history.size > 30) history.removeAt(history.size - 1)
         prefs.edit().putString("hist", history.joinToString("\n")).apply()
+    }
+
+    /** Переключает на ближайший ранее просмотренный канал из сохранённой истории. */
+    private fun playPreviousChannel() {
+        val current = cur ?: return
+        val previousKey = history.firstOrNull { it != current.okey && chans.any { c -> c.okey == it } }
+        val previous = previousKey?.let { key -> chans.firstOrNull { it.okey == key } }
+        if (previous == null) {
+            toast(L.t("Нет предыдущего просмотренного канала"))
+            return
+        }
+        playChan(previous)
     }
 
     private fun arcKey(c: Channel, p: Prog) = c.okey + "@" + p.s
