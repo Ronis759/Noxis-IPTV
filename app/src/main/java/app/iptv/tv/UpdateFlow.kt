@@ -76,8 +76,9 @@ class UpdateFlow(
             return
         }
         if (manual) {
-            // найденное раньше обновление предлагаем сразу, без ещё одного запроса
-            available?.let { ask(it, mine()); return }
+            // Ручная проверка всегда заново обращается к GitHub:
+            // сохранённые данные могли устареть после появления нового релиза.
+            synchronized(updateLock) { available = null; forget() }
         } else if (now() - prefs.getLong("upd_t", 0) < 6 * 3600 || now() - lastTry < 600) return
         if (busy) return
         busy = true
