@@ -197,6 +197,7 @@ class MainActivity : Activity() {
     private lateinit var btDim: Button
     private lateinit var dimOverlay: View
     private var detailsDialog: FrameLayout? = null   // подробное окно передачи (полупрозрачная карточка)
+    private var detailsProg: Prog? = null            // передача, показанная в подробном окне
     private val DIM_MIN = 30
     private val EPG_CHECK_MS = 30 * 60 * 1000L   // как часто проверять, не пора ли тихо обновить программу
     private var panelDim = 95   // непрозрачность подложки панелей (списки каналов, телепрограмма, группы, серверы), %
@@ -2014,14 +2015,16 @@ class MainActivity : Activity() {
     private fun showOsd() { if (arch != null) showSeek() else hud() }
 
     /** Подробности текущей передачи из EPG. Открывается повторным нажатием OK после инфобара. */
-    private fun showProgramDetails() {
+    private fun showProgramDetails(prog: Prog? = null) {
         val c = cur ?: return
-        val p = arch ?: nowProg(c) ?: run {
+        val p = prog ?: arch ?: nowProg(c) ?: run {
             toast(L.t("Для текущего канала нет программы передач"))
             return
         }
         val archiveAvailable = Iptv.arcCandidates(c, p.s, p.e, ctype).isNotEmpty()
+        val archive = archivedPrograms(c, p)
         closeProgramDetails()
+        detailsProg = p
         ui.removeCallbacks(hideHud); hudBox.visibility = View.GONE; seekBox.visibility = View.GONE
 
         fun label(t: String, size: Float, color: Int, top: Int = 0) = TextView(this).apply {
@@ -2035,6 +2038,7 @@ class MainActivity : Activity() {
             addView(label(c.name, 22f, Color.WHITE))
             addView(label(p.title, 26f, Theme.accent, 6))
             addView(label(hm(p.s) + "–" + hm(p.e), 18f, Theme.gray, 6))
+            if (archive.size > 1) addView(label("◄ ► — " + L.t("другие передачи архива"), 14f, Theme.gray, 6))
         }
         val body = TextView(this).apply {
             text = if (p.description.isNotEmpty()) p.description else L.t("Описание отсутствует")
@@ -2085,7 +2089,31 @@ class MainActivity : Activity() {
     private fun closeProgramDetails() {
         val d = detailsDialog ?: return
         detailsDialog = null
+        detailsProg = null
         root.removeView(d)
+    }
+
+    /** Передачи канала, доступные в архиве (уже закончились), по времени. */
+    private fun archivedPrograms(c: Channel, base: Prog): List<Prog> {
+        val n = now()
+        val l = (epg[c.eid] ?: emptyList())
+            .filter { it.e <= n && Iptv.arcCandidates(c, it.s, it.e, ctype).isNotEmpty() }
+            .sortedBy { it.s }
+        return if (l.none { it.s == base.s && it.e == base.e }) (l + base).sortedBy { it.s } else l
+    }
+
+    /** Переход по архиву в подробном окне: -1 — раньше, +1 — позже. */
+    private fun stepDetails(dir: Int) {
+        val c = cur ?: return
+        val p = detailsProg ?: return
+        val l = archivedPrograms(c, p)
+        val i = l.indexOfFirst { it.s == p.s && it.e == p.e }
+        val j = i + dir
+        if (i < 0 || j !in l.indices) {
+            toast(if (dir < 0) L.t("Раньше передач в архиве нет") else L.t("Позже передач в архиве нет"))
+            return
+        }
+        showProgramDetails(l[j])
     }
 
     private fun zapByList() = prefs.getString("zapm", "list") != "all"
@@ -2690,6 +2718,10 @@ class MainActivity : Activity() {
         if (detailsDialog != null) {
             if (k == KeyEvent.KEYCODE_BACK) {
                 if (e.action == KeyEvent.ACTION_UP) closeProgramDetails()
+                return true
+            }
+            if (k == KeyEvent.KEYCODE_DPAD_LEFT || k == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) stepDetails(if (k == KeyEvent.KEYCODE_DPAD_LEFT) -1 else 1)
                 return true
             }
             return super.dispatchKeyEvent(e)
