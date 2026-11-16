@@ -17,7 +17,7 @@ android {
         targetSdk = 35
         // В GitHub Actions versionCode растёт с каждым запуском, локально = 1
         versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
-        versionName = "2.8.5"
+        versionName = "2.8.6"
         // Автообновление имеет смысл только у сборки, подписанной постоянным ключом (иначе Android не установит новую версию поверх)
         buildConfigField("boolean", "UPDATES_ENABLED", hasReleaseKey.toString())
     }
@@ -45,7 +45,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    lint { abortOnError = false }
+    lint {
+        abortOnError = false
+        // Системные проверки единственного окна-экрана не относятся к приложению для ТВ (собственный интерфейс, один Activity)
+        disable += listOf("SetTextI18n", "UnsafeOptInUsageError")
+    }
 }
 dependencies {
     // Media3 1.9+ требует minSdk 23 (Android 6): на 1.8.x остаются поддерживаемыми приставки с Android 5 (minSdk 21)
@@ -55,4 +59,6 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-rtsp:1.8.0")
     implementation("androidx.media3:media3-ui:1.8.0")
     testImplementation("junit:junit:4.13.2")
+    // kxml2 — тот же разборщик XML, что android.util.Xml подставляет на устройстве: разбор XMLTV проверяется в обычном JVM-тесте
+    testImplementation("net.sf.kxml:kxml2:2.3.0")
 }

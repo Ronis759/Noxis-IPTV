@@ -131,8 +131,8 @@ object Iptv {
         return out.toByteArray()
     }
 
-    /** Копирует поток, но не больше [max] байт: иначе TooBigException. */
-    fun copyLimited(i: InputStream, o: java.io.OutputStream, max: Long) {
+    /** Копирует поток, но не больше [max] байт: иначе TooBigException. Возвращает число записанных байт. */
+    fun copyLimited(i: InputStream, o: java.io.OutputStream, max: Long): Long {
         val buf = ByteArray(65536)
         var total = 0L
         while (true) {
@@ -142,15 +142,22 @@ object Iptv {
             if (total > max) throw TooBigException(max)
             o.write(buf, 0, n)
         }
+        return total
     }
 
-    /** Потоковая загрузка в файл (без хранения всего ответа в памяти). Старый файл заменяется только при успехе. */
+    /**
+     * Потоковая загрузка в файл (без хранения всего ответа в памяти). Старый файл заменяется только при успехе.
+     * Обрыв соединения посередине не должен выглядеть успехом: если сервер указал размер, а получено меньше — IOException.
+     * (Иначе обрезанный файл программы передач заменял рабочий.)
+     */
     fun download(url: String, dest: File, ua: String? = null, max: Long = Long.MAX_VALUE) {
         val tmp = File(dest.parentFile, dest.name + ".tmp")
         try {
             withUa(url, ua == null, ua == null, ua) { c ->
-                if (c.contentLength >= 0 && c.contentLength.toLong() > max) throw TooBigException(max)
-                c.inputStream.use { i -> tmp.outputStream().use { o -> copyLimited(i, o, max) } }
+                val len = c.contentLength.toLong()
+                if (len > max) throw TooBigException(max)
+                val got = c.inputStream.use { i -> tmp.outputStream().use { o -> copyLimited(i, o, max) } }
+                if (len > 0 && got < len) throw IOException(L.f("файл загружен не полностью ({0} из {1} байт)", got, len))
             }
             if (!tmp.renameTo(dest)) {
                 dest.delete()
@@ -356,19 +363,27 @@ object Iptv {
      * Потоковый разбор XMLTV из файла (gzip определяется по сигнатуре).
      * Если передан [chans], в памяти остаются только передачи каналов плейлиста
      * и только в окне, которое реально нужно архиву — это резко снижает расход памяти.
+     * [parser] — разборщик XML (по умолчанию android.util.Xml; тесты передают kxml2, доступный в JVM).
      */
-    fun parseEpg(f: File, tz: Int, chans: List<Channel>?): Epg {
+    fun parseEpg(f: File, tz: Int, chans: List<Channel>?, parser: () -> XmlPullParser = { Xml.newPullParser() }): Epg {
         val raw = BufferedInputStream(FileInputStream(f), 65536)
         raw.mark(2)
         val b0 = raw.read()
         val b1 = raw.read()
         raw.reset()
         val inp: InputStream = if (b0 == 0x1f && b1 == 0x8b) GZIPInputStream(raw, 65536) else raw
-        return inp.use { parseEpgStream(it, tz, chans) }
+        return inp.use { parseEpgStream(it, tz, chans, parser) }
     }
 
-    private fun parseEpgStream(inp: InputStream, tz: Int, chans: List<Channel>?): Epg {
-        val p = Xml.newPullParser()
+    /** Текст элемента до закрывающего тега; при ошибке атрибутов — без них. */
+    private fun textOf(p: XmlPullParser): String = try {
+        p.nextText().trim()
+    } catch (e: org.xmlpull.v1.XmlPullParserException) {
+        try { (p.text ?: "").trim() } catch (x: Exception) { "" }
+    }
+
+    private fun parseEpgStream(inp: InputStream, tz: Int, chans: List<Channel>?, parser: () -> XmlPullParser): Epg {
+        val p = parser()
         p.setInput(inp, null)
         val map = HashMap<String, MutableList<Prog>>()
         val names = HashMap<String, String>()
@@ -405,8 +420,9 @@ object Iptv {
                         s = xt(p.getAttributeValue(null, "start"), tz)
                         e = xt(p.getAttributeValue(null, "stop"), tz)
                     }
-                    "title" -> if (inProg && title.isEmpty()) title = p.nextText().trim()
-                    "desc" -> if (inProg && description.isEmpty()) description = p.nextText().trim()
+                    // неверный атрибут (например, lang="х") в заголовке не должен ронять разбор: текст читаем и без него
+                    "title" -> if (inProg && title.isEmpty()) title = textOf(p)
+                    "desc" -> if (inProg && description.isEmpty()) description = textOf(p)
                 }
             } else if (ev == XmlPullParser.END_TAG) {
                 when (p.name) {

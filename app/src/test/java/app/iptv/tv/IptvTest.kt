@@ -7,11 +7,29 @@ import org.junit.Assert.fail
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.IOException
 import java.nio.charset.Charset
 import java.util.zip.GZIPOutputStream
 
 class IptvTest {
+    /** Скопировано меньше, чем заявил сервер, — это обрыв, а не полный файл. */
+    @Test fun short_copy_is_detected() {
+        val out = ByteArrayOutputStream()
+        val got = Iptv.copyLimited(ByteArrayInputStream("12345".toByteArray()), out, 100)
+        assertEquals(5L, got)   // вызывающий сравнивает с Content-Length и сам решает, что ответ неполный
+        assertEquals("12345", out.toString("UTF-8"))
+    }
+
+    /** Ответ больше лимита обрывается исключением, файл не получает лишних данных. */
+    @Test fun copy_limit_is_enforced() {
+        try {
+            Iptv.copyLimited(ByteArrayInputStream(ByteArray(1000)), ByteArrayOutputStream(), 10)
+            fail("лимит не проверен")
+        } catch (e: TooBigException) { }
+    }
+
+
     private fun ch(url: String, ctype: String = "", csrc: String = "", name: String = "Канал") =
         Channel(0, "", name, "", "", "Группа", url, 0, ctype, csrc)
 

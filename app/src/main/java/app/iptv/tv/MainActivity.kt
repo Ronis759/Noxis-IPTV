@@ -1,5 +1,6 @@
 package app.iptv.tv
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -60,6 +61,13 @@ import java.util.Locale
 private const val RC_EXPORT = 8
 private const val RC_IMPORT = 9
 private const val RC_PERM = 10
+
+/**
+ * Экран на переднем плане: после recreate() (смена темы или языка) старый экран не показывает свои окна и сообщения.
+ * Ссылка только на время, пока пакет создан (сбрасывается в onDestroy), — это не утечка.
+ */
+@SuppressLint("StaticFieldLeak")
+@Volatile private var currentActivity: MainActivity? = null
 
 @UnstableApi
 class MainActivity : Activity() {
@@ -227,6 +235,7 @@ class MainActivity : Activity() {
     private lateinit var sleepTimer: SleepTimer
     private lateinit var btSleepTimer: Button
     private var sleepTimerWarningShown = false
+    private var sleepTimerDlg: FrameLayout? = null   // открытое окно таймера сна (закрывается только своим «Закрыть»)
 
     private fun dp(x: Int) = (x * resources.displayMetrics.density).toInt()
     private fun now() = System.currentTimeMillis() / 1000
@@ -255,6 +264,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
+        currentActivity = this
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         root = FrameLayout(this)
         root.setBackgroundColor(Color.BLACK)
@@ -503,7 +513,8 @@ class MainActivity : Activity() {
     private fun updateHudProgress() {
         val a = arch ?: return
         val total = (a.e - a.s) * 1000
-        if (total <= 0) return
+        // до prepare() позиция неизвестна (C.TIME_UNSET ≈ -9·10¹⁸): полоса и время не должны скакать
+        if (total <= 0 || player.currentPosition < 0) return
         val pos = player.currentPosition.coerceIn(0L, total)
         hudBar.progress = (pos * 1000 / total).toInt(); hudBar.visibility = View.VISIBLE
         hudLeft.text = "⏪ " + fmtT(pos) + " / " + fmtT(total); hudLeft.visibility = View.VISIBLE
@@ -513,7 +524,9 @@ class MainActivity : Activity() {
     private fun seekArch(d: Long) {
         val a = arch ?: return
         val total = (a.e - a.s) * 1000
-        val target = (player.currentPosition + d).coerceIn(0L, maxOf(0L, total - 1000))
+        // позиция неизвестна до prepare() (C.TIME_UNSET) — считаем от стартовой
+        val from = if (player.currentPosition >= 0) player.currentPosition else startPos
+        val target = (from + d).coerceIn(0L, maxOf(0L, total - 1000))
         // передача ещё идёт (перемотка прямого эфира назад): дошли до «сейчас» — возвращаемся в прямой эфир
         if (d > 0 && a.e > now() && target >= (now() - a.s) * 1000 - 5000) {
             val c = arcOwner ?: cur
@@ -1266,10 +1279,11 @@ class MainActivity : Activity() {
         seekBox.visibility = View.GONE
         p?.visibility = View.VISIBLE
     }
-    private fun closePanels() = showPanel(null)
+    private fun closePanels() { closeDialog(); showPanel(null) }
     private fun panelOpen() = chPanel.visibility == View.VISIBLE || arPanel.visibility == View.VISIBLE || setup.visibility == View.VISIBLE || srvPanel.visibility == View.VISIBLE
 
     private fun toast(t: String) {
+        if (!isCurrent()) return   // сообщение от фонового потока уже заменённого экрана
         toastTv.text = t; toastTv.visibility = View.VISIBLE
         ui.removeCallbacks(hideToast); ui.postDelayed(hideToast, 3000)
     }
@@ -1961,8 +1975,10 @@ class MainActivity : Activity() {
 
     /** Новое воспроизведение: сбрасывает отложенные повторы и состояние восстановления. */
     private fun startUrl(url: String) {
-        ui.removeCallbacks(retryRun); ui.removeCallbacks(stallRun)
-        retries = 0; readyMode = null
+        ui.removeCallbacks(retryRun)
+        ui.removeCallbacks(stallRun)
+        retries = 0
+        readyMode = null
         playUrl(url)
     }
 
@@ -1970,7 +1986,7 @@ class MainActivity : Activity() {
     private fun scheduleRetry(): Boolean {
         if (lastUrl.isEmpty() || retries >= maxRetries) return false
         retries++
-        if (arch != null && readyMode != null && player.currentPosition > 0) startPos = player.currentPosition
+        if (arch != null && readyMode != null && player.currentPosition >= 0) startPos = player.currentPosition
         retryHls = readyMode == true
         toast(L.f("Связь потеряна, повтор {0} из {1}…", retries, maxRetries))
         ui.removeCallbacks(retryRun)
@@ -2339,6 +2355,9 @@ class MainActivity : Activity() {
     /* ---------- резервная копия настроек ---------- */
     private fun appVersion(): String = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "?" } catch (e: Exception) { "?" }
 
+    /** Этот экран — текущий (не заменён пересозданием при смене темы или языка). */
+    private fun isCurrent(): Boolean = currentActivity === this
+
     /** Есть ли в системе приложение, умеющее выполнить [i]. Без проверки на боксах без окна выбора файлов система сама пишет «Действие не поддерживается». */
     private fun canHandle(i: Intent): Boolean = try { i.resolveActivity(packageManager) != null } catch (e: Exception) { false }
 
@@ -2365,7 +2384,8 @@ class MainActivity : Activity() {
 
     /** Показывает результат окном: путь к файлу должен быть виден, пока его не прочитают. Вызывать из потока интерфейса. */
     private fun showInfo(title: String, msg: String) {
-        if (isFinishing || isDestroyed) return
+        // экран пересоздан (смена темы или языка): фоновые потоки старого экрана его окна не показывают
+        if (isFinishing || isDestroyed || !isCurrent()) return
         android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
             .setTitle(title).setMessage(msg).setPositiveButton("OK", null).show()
     }
@@ -2958,6 +2978,7 @@ class MainActivity : Activity() {
         }
     }
     override fun onDestroy() {
+        if (currentActivity === this) currentActivity = null
         sleepTimer.cancel()
         super.onDestroy()
         ui.removeCallbacksAndMessages(null)  // Очистить ВСЕ callbacks Handler'а для предотвращения утечек
@@ -3045,17 +3066,21 @@ class MainActivity : Activity() {
             setOnClickListener { /* предотвратить закрытие по клику мимо */ }
         }
 
+        // «Назад» закрывает только это окно (раньше вместо него закрывался последний элемент экрана)
+        overlay.setOnKeyListener { _, k, e ->
+            if (k == KeyEvent.KEYCODE_BACK && e.action == KeyEvent.ACTION_UP) { closeDialog(); true } else false
+        }
         root.addView(overlay, FrameLayout.LayoutParams(-1, -1))
+        sleepTimerDlg = overlay
         // Найти первую кнопку и установить фокус
         val firstBtn = dialog.getChildAt(2) // после title и subtitle
         if (firstBtn is Button) firstBtn.requestFocus()
     }
 
-    /** Закрыть диалог таймера сна. */
+    /** Закрыть окно таймера сна (только его, а не последний элемент экрана). */
     private fun closeDialog() {
-        val overlay = root.getChildAt(root.childCount - 1)
-        if (overlay is FrameLayout) {
-            root.removeView(overlay)
-        }
+        val overlay = sleepTimerDlg ?: return
+        sleepTimerDlg = null
+        root.removeView(overlay)
     }
 }
