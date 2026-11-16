@@ -19,6 +19,8 @@ Thumbs.db
 
 # Personal server lists and credentials
 servers.txt
+secrets.txt
+keys-backup/
 *.keystore
 *.jks
 *.p12
