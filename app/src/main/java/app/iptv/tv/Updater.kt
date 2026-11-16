@@ -10,6 +10,7 @@ import androidx.core.content.FileProvider
 import androidx.core.content.pm.PackageInfoCompat
 import org.json.JSONObject
 import java.io.File
+import java.io.FileInputStream
 import java.io.IOException
 
 /**
@@ -84,10 +85,14 @@ object Updater {
         val dir = File(ctx.filesDir, "updates").apply { mkdirs() }
         val f = File(dir, "update-${info.code}.apk")
         dir.listFiles()?.forEach { if (it != f) it.delete() }
-        // уже скачанный файл годится, только если сумма совпала
+        // уже скачанный файл годится, только если сумма совпала; иначе — и кусок от оборванной загрузки, и испорченный
         if (f.exists() && (info.size <= 0 || f.length() == info.size) && Integrity.sha256(f) == info.sha256) return f
         f.delete()
         Iptv.download(info.url, f, UA, MAX_APK)
+        // APK — zip: признак начала файла (PK\x03\x04). Обрыв соединения или страница-заглушка прокси так не начинаются.
+        val head = ByteArray(4)
+        val okStart = try { FileInputStream(f).use { it.read(head) } == 4 && head[0] == 'P'.code.toByte() && head[1] == 'K'.code.toByte() } catch (e: Exception) { false }
+        if (!okStart) { f.delete(); throw IOException(L.t("скачанный файл повреждён — установка отменена")) }
         if (info.size > 0 && f.length() != info.size) { f.delete(); throw IOException(L.t("файл загружен не полностью")) }
         if (Integrity.sha256(f) != info.sha256) { f.delete(); throw IOException(L.t("контрольная сумма не совпала — файл удалён")) }
         return f

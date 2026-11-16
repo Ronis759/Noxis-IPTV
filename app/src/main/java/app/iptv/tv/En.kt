@@ -12,6 +12,7 @@ object En {
         "Не удалось загрузить: {0}" to "Failed to load: {0}",
         "Не удалось сохранить файл" to "Failed to save the file",
         "файл загружен не полностью ({0} из {1} байт)" to "file downloaded incompletely ({0} of {1} bytes)",
+        "скачанный файл повреждён — установка отменена" to "the downloaded file is corrupt — installation cancelled",
         "Поток не отвечает" to "Stream is not responding",
         "Архив: пробую другой формат ({0} из {1})…" to "Archive: trying another format ({0} of {1})…",
         "Архив не воспроизводится (тип: {0}) — смените тип в настройках. " to "Archive won't play (type: {0}) — change the type in settings. ",

@@ -26,6 +26,9 @@ class UpdateFlow(
     @Volatile private var lastTry = 0L
     private val updateLock = Any()
 
+    /** Кнопка «Установить», уже нажатая (найдено обновление): повторная проверка не нужна. */
+    private var installPending = false
+
     /** Понятный текст о состоянии проверки обновлений (виден в Настройки → Обновление): почему нет значка и что нашлось. */
     @Volatile var status: String = ""
         private set
@@ -103,6 +106,7 @@ class UpdateFlow(
                     }
                 } else {
                     synchronized(updateLock) {
+                        // сброс и в памяти, и в настройках: иначе старая «доступна сборка» показывалась и после перезапуска
                         forget()
                         available = null
                     }
@@ -128,24 +132,33 @@ class UpdateFlow(
         }.start()
     }
 
-    /** Предлагает установить найденное обновление (по значку в меню). */
+    /** Предлагает установить найденное обновление (по значку в меню); если его нет — сначала проверка. */
     fun promptInstall() {
         val i = available
         if (i == null) { check(true); return }
+        synchronized(updateLock) {
+            if (installPending) return
+            installPending = true
+        }
         ask(i, mine())
     }
+
+    /** Пользователь закрыл окно установки: сможет открыть его снова или проверить обновления заново. */
+    private fun closeInstallDialog() { synchronized(updateLock) { installPending = false } }
 
     private fun ask(info: Updater.Info, mine: Long) {
         android.app.AlertDialog.Builder(a, android.R.style.Theme_Material_Dialog_Alert)
             .setTitle(L.f("Доступна версия {0}", info.code))
             .setMessage(L.f("Установлена: {0}. Скачать и установить обновление?", mine))
             .setPositiveButton(L.t("Обновить")) { _, _ -> download(info) }
-            .setNegativeButton(L.t("Позже"), null)
+            .setNegativeButton(L.t("Позже")) { _, _ -> closeInstallDialog() }
+            .setOnDismissListener { closeInstallDialog() }
             .show()
     }
 
     private fun download(info: Updater.Info) {
         toast(L.t("Загрузка обновления…"))
+        closeInstallDialog()
         Thread {
             try {
                 val f = Updater.download(a, info)
