@@ -81,7 +81,7 @@ class Repository(private val ctx: Context, private val prefs: SharedPreferences)
             if (eu.isEmpty()) { if (!haveData) l.onNoUrl(); return }
             val ef = File(ctx.filesDir, "epg.bin")
             val cf = File(ctx.filesDir, "epg.cache")
-            val key = "v3|" + eu + "|" + tz
+            val key = "v4|" + eu + "|" + tz   // с v4 названия и описания в кэше хранятся отдельными таблицами
             val ckeys = chs.map { it.id + "\u0002" + it.name }
             var downloaded = false
             fun download() { Iptv.download(eu, ef); prefs.edit().putString("epgsrc", eu).apply(); downloaded = true }

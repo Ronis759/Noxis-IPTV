@@ -361,9 +361,11 @@ class MainActivity : Activity() {
         panelDim = prefs.getInt("dim", 95).coerceIn(DIM_MIN, 100)
         repo = Repository(this, prefs)
         updates = UpdateFlow(this, prefs, { toast(it) }) { runOnUiThread { refreshRail(); refreshUpdateUi() } }
-        favs = PrefSet(prefs.getStringSet("fav", emptySet()) ?: emptySet()) { prefs.edit().putStringSet("fav", HashSet(it)).apply() }
+        // commit(): при обновлении приложения установчик убивает процесс, и асинхронная запись (apply) может не успеть —
+        // из-за этого избранное пропадало после обновления из самого приложения
+        favs = PrefSet(prefs.getStringSet("fav", emptySet()) ?: emptySet()) { prefs.edit().putStringSet("fav", HashSet(it)).commit() }
         categories = ChannelCategories(loadCategories()) { saveCategories(it) }
-        hiddenGroups = PrefSet(prefs.getStringSet("hg", emptySet()) ?: emptySet()) { prefs.edit().putStringSet("hg", HashSet(it)).apply() }
+        hiddenGroups = PrefSet(prefs.getStringSet("hg", emptySet()) ?: emptySet()) { prefs.edit().putStringSet("hg", HashSet(it)).commit() }
 
         // Инициализация таймера сна
         sleepTimer = SleepTimer(
@@ -2776,6 +2778,14 @@ class MainActivity : Activity() {
             }
             return super.dispatchKeyEvent(e)
         }
+        // окно таймера сна: «Назад» закрывает его, а не выходит из приложения
+        if (sleepTimerDlg != null) {
+            if (k == KeyEvent.KEYCODE_BACK) {
+                if (e.action == KeyEvent.ACTION_UP) closeDialog()
+                return true
+            }
+            return super.dispatchKeyEvent(e)
+        }
         if (panelOpen()) {
             // телепрограмма рядом со списком каналов: ← из списка дней или «Назад» возвращает к выбору канала
             if (arPanel.visibility == View.VISIBLE && chPanel.visibility == View.VISIBLE &&
@@ -2997,6 +3007,7 @@ class MainActivity : Activity() {
 
     /** Открыть диалог выбора времени для таймера сна. */
     private fun showSleepTimerDialog() {
+        closeDialog()   // повторное открытие не должно оставлять старое окно поверх экрана
         val dialog = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), dp(16), dp(24), dp(16))
@@ -3077,10 +3088,13 @@ class MainActivity : Activity() {
         if (firstBtn is Button) firstBtn.requestFocus()
     }
 
-    /** Закрыть окно таймера сна (только его, а не последний элемент экрана). */
+    /** Закрыть собственные окна поверх видео: таймер сна и подробности передачи. */
     private fun closeDialog() {
-        val overlay = sleepTimerDlg ?: return
-        sleepTimerDlg = null
-        root.removeView(overlay)
+        val overlay = sleepTimerDlg
+        if (overlay != null) {
+            sleepTimerDlg = null
+            root.removeView(overlay)
+        }
+        closeProgramDetails()
     }
 }

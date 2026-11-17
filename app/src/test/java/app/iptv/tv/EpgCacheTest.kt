@@ -6,6 +6,13 @@ import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.DataOutputStream
+import java.io.File
+import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 class EpgCacheTest {
     @get:Rule val tmp = TemporaryFolder()
@@ -39,6 +46,42 @@ class EpgCacheTest {
     @Test fun save_leaves_no_temp_file() {
         val f = tmp.newFile("epg3.cache")
         EpgCache.save(f, "key", 1L, listOf("1|A"), listOf("a"), map)
-        assertEquals(false, java.io.File(f.parentFile, "epg3.cache.tmp").exists())
+        assertEquals(false, File(f.parentFile, "epg3.cache.tmp").exists())
+    }
+
+    /** Разбор XMLTV через kxml2: android.util.Xml в JVM-тестах недоступен. */
+    private fun parse(xml: String): Epg {
+        val f = File.createTempFile("epg", ".xml")
+        try {
+            f.writeText(xml)
+            return Iptv.parseEpg(f, 0, null, { org.kxml2.io.KXmlParser() })
+        } finally { f.delete() }
+    }
+
+    /** Очень длинное описание не должно попадать в память и кэш целиком. */
+    @Test fun long_description_is_truncated() {
+        val long = "Описание".repeat(1000)
+        val fmt = SimpleDateFormat("yyyyMMddHHmmss ' +0000'", Locale.ROOT).apply { timeZone = TimeZone.getTimeZone("UTC") }
+        val now = System.currentTimeMillis() / 1000
+        val start = fmt.format(Date((now - 3600) * 1000))
+        val stop = fmt.format(Date(now * 1000))
+        val e = parse(
+            """<tv><channel id="a"><display-name>A</display-name></channel>
+               <programme start="$start" stop="$stop" channel="a">
+                 <title>Передача</title><desc>$long</desc>
+               </programme></tv>"""
+        )
+        val p = e.map["a"]!!.first()
+        assertEquals(Iptv.MAX_DESC, p.description.length)
+        assertEquals("Передача", p.title)
+    }
+
+    /** Повреждённый кэш с нереалистичным числом каналов отклоняется до выделения памяти. */
+    @Test fun corrupt_cache_is_rejected() {
+        val f = tmp.newFile("epg4.cache")
+        DataOutputStream(FileOutputStream(f)).use { o ->
+            o.writeUTF("key"); o.writeLong(1L); o.writeInt(Int.MAX_VALUE)
+        }
+        assertNull(EpgCache.load(f, "key"))
     }
 }

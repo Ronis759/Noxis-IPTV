@@ -42,6 +42,13 @@ object Iptv {
     const val MAX_PLAYLIST = 64L * 1024 * 1024
     const val MAX_LOGO = 4L * 1024 * 1024
     const val MAX_JSON = 2L * 1024 * 1024
+    /**
+     * Предельная длина названия и описания передачи. Некоторые серверы кладут в <desc> целые страницы:
+     * без ограничения память на ТВ-боксе заканчивается, и телевизор может зависнуть.
+     * Для окна подробностей с прокруткой этого достаточно с большим запасом.
+     */
+    const val MAX_TITLE = 300
+    const val MAX_DESC = 1000
     @Volatile var customUa: String = ""
     /** User-Agent, с которым сервер реально ответил (если пришлось подбирать). Передаётся и в плеер. */
     @Volatile var goodUa: String? = null
@@ -430,8 +437,9 @@ object Iptv {
                     "programme" -> {
                         val w = wanted
                         if (inProg && e > s && e > lo && s < hi && (w == null || pch in w)) {
-                            val t = titles.getOrPut(title) { title }
-                            map.getOrPut(pch) { ArrayList() }.add(Prog(s, e, t, description))
+                            val t = titles.getOrPut(title.take(MAX_TITLE)) { title.take(MAX_TITLE) }
+                            // описание ограничиваем сразу, чтобы оно не попало ни в память, ни в кэш целиком
+                            map.getOrPut(pch) { ArrayList() }.add(Prog(s, e, t, description.take(MAX_DESC)))
                         }
                         inProg = false
                     }

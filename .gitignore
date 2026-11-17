@@ -27,3 +27,6 @@ keys-backup/
 
 # Settings backups containing URLs, logins or keys
 noxis-settings*.json
+
+# Локально собранные APK (не публикуем: публикация только через Actions)
+releases/
