@@ -812,8 +812,11 @@ class MainActivity : Activity() {
     /**
      * Ширина архива: экран минус список каналов, если он виден, — тогда вместе они закрывают экран без промежутка.
      * Когда архив открыт один (список скрыт), панель шире обычного списка.
+     * Панель архива создаётся позже списка каналов, а setGroupsOpen(false) вызывается уже в buildChPanel():
+     * пока arPanel не создан, подгонять нечего.
      */
     private fun fitArchPanel() {
+        if (!::arPanel.isInitialized || !::chPanel.isInitialized) return
         val lp = arPanel.layoutParams
         val frac = if (chPanel.visibility == View.VISIBLE) 1f - chPanelFrac() else 0.64f
         lp.width = (resources.displayMetrics.widthPixels * frac).toInt()
@@ -827,8 +830,8 @@ class MainActivity : Activity() {
         val lp = chPanel.layoutParams
         lp.width = (resources.displayMetrics.widthPixels * chPanelFrac()).toInt()
         chPanel.layoutParams = lp
-        // при открытом архиве его ширина зависит от ширины списка каналов
-        if (arPanel.visibility == View.VISIBLE) fitArchPanel()
+        // при открытом архиве его ширина зависит от ширины списка каналов (arPanel создаётся позже — проверяем готовность)
+        if (::arPanel.isInitialized && arPanel.visibility == View.VISIBLE) fitArchPanel()
         refreshRail()
     }
 
