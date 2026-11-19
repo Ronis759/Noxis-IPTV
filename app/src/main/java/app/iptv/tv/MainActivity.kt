@@ -736,7 +736,7 @@ class MainActivity : Activity() {
             addView(rail, LinearLayout.LayoutParams(dp(68), -1))
             addView(content, LinearLayout.LayoutParams(0, -1, 1f))
         }
-        root.addView(chPanel, FrameLayout.LayoutParams((w * 0.43f).toInt(), -1, Gravity.START))
+        root.addView(chPanel, FrameLayout.LayoutParams((w * 0.36f).toInt(), -1, Gravity.START))
         setGroupsOpen(false)
     }
 
@@ -811,7 +811,7 @@ class MainActivity : Activity() {
         groupsOpen = on
         grpList.visibility = if (on) View.VISIBLE else View.GONE
         val lp = chPanel.layoutParams
-        lp.width = (resources.displayMetrics.widthPixels * (if (on) 0.62f else 0.43f)).toInt()
+        lp.width = (resources.displayMetrics.widthPixels * (if (on) 0.55f else 0.36f)).toInt()
         chPanel.layoutParams = lp
         refreshRail()
     }
@@ -1407,13 +1407,12 @@ class MainActivity : Activity() {
         else if (grp in categories.names()) all.filter { categories.contains(grp, it.okey) }
         else all.filter { it.group == grp }
         val sel = if (moving) chList.selectedItemPosition else -1
-        val nums = java.util.IdentityHashMap<Channel, Int>().also { m -> numList().forEachIndexed { k, c -> m[c] = k + 1 } }
         val t = now()
         ad(chList).set(shown.mapIndexed { i, it ->
             val p = nowProg(it)
             val mark = (if (i == sel) "⇅" else if (it === cur) "▶" else "") + (if (isFav(it)) (if (i == sel || it === cur) " ★" else "★") else "")
             Row(it.name, if (p != null) hm(p.s) + "–" + hm(p.e) + "  " + p.title else "", it, false, it.logo,
-                num = nums[it] ?: 0, prog = if (p != null && p.e > p.s) (t - p.s).toFloat() / (p.e - p.s) else -1f, mark = mark)
+                prog = if (p != null && p.e > p.s) (t - p.s).toFloat() / (p.e - p.s) else -1f, mark = mark)
         })
         refreshTitle()
     }

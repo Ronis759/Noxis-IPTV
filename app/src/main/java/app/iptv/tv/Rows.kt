@@ -17,12 +17,12 @@ import android.widget.TextView
 object UiScale { @Volatile var f = 1f }
 
 /**
- * Строка списка. [num] — номер канала слева (0 — не показывать), [prog] — прогресс текущей передачи 0..1 (меньше нуля — без полосы),
+ * Строка списка. [prog] — прогресс текущей передачи 0..1 (меньше нуля — без полосы),
  * [mark] — значки справа («▶» играет, «★» избранное, «⇅» переносится).
  */
 class Row(
     val title: String, val sub: String = "", val tag: Any? = null, val dim: Boolean = false, val icon: String = "", val short: String = "",
-    val num: Int = 0, val prog: Float = -1f, val mark: String = ""
+    val prog: Float = -1f, val mark: String = ""
 )
 
 class RowAdapter(private val ctx: Context) : BaseAdapter() {
@@ -43,12 +43,9 @@ class RowAdapter(private val ctx: Context) : BaseAdapter() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(px(12), px(8), px(12), px(8))
-            // 0: номер канала
-            addView(TextView(ctx).apply { gravity = Gravity.END or Gravity.CENTER_VERTICAL; maxLines = 1; minWidth = px(40); setTextColor(Theme.gray) },
-                LinearLayout.LayoutParams(-2, -2).apply { rightMargin = px(10) })
-            // 1: логотип
+            // 0: логотип
             addView(ImageView(ctx).apply { scaleType = ImageView.ScaleType.FIT_CENTER }, LinearLayout.LayoutParams(px(60), px(40)))
-            // 2: название, передача, полоса прогресса
+            // 1: название, передача, полоса прогресса
             val lp = LinearLayout.LayoutParams(0, -2, 1f)
             lp.leftMargin = px(12)
             addView(LinearLayout(ctx).apply {
@@ -61,19 +58,15 @@ class RowAdapter(private val ctx: Context) : BaseAdapter() {
                     progressBackgroundTintList = ColorStateList.valueOf(Theme.stroke)
                 }, LinearLayout.LayoutParams(-1, px(3)).apply { topMargin = px(5) })
             }, lp)
-            // 3: значки справа
+            // 2: значки справа
             addView(TextView(ctx).apply { maxLines = 1; setTextColor(Theme.accent) }, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = px(10) })
         }
         val r = rows[i]
         val comp = compact
-        (box.getChildAt(0) as TextView).apply {
-            visibility = if (r.num > 0 && !comp) View.VISIBLE else View.GONE
-            text = r.num.toString(); textSize = 16f * UiScale.f
-        }
-        val img = box.getChildAt(1) as ImageView
+        val img = box.getChildAt(0) as ImageView
         img.visibility = if (icons) View.VISIBLE else View.GONE
         Logos.load(img, r.icon)
-        val tx = box.getChildAt(2) as LinearLayout
+        val tx = box.getChildAt(1) as LinearLayout
         box.gravity = Gravity.CENTER_VERTICAL
         (tx.getChildAt(0) as TextView).apply {
             // служебные группы («Все», «История») и «Без группы» переводятся; названия каналов и групп плейлиста — как есть
@@ -88,7 +81,7 @@ class RowAdapter(private val ctx: Context) : BaseAdapter() {
             visibility = if (r.prog >= 0f && !comp) View.VISIBLE else View.GONE
             progress = (r.prog.coerceIn(0f, 1f) * 1000).toInt()
         }
-        (box.getChildAt(3) as TextView).apply {
+        (box.getChildAt(2) as TextView).apply {
             visibility = if (r.mark.isEmpty() || comp) View.GONE else View.VISIBLE
             text = r.mark; textSize = 18f * UiScale.f
         }
