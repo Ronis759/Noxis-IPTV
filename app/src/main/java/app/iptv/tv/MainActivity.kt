@@ -358,7 +358,7 @@ class MainActivity : Activity() {
             val i = ln.indexOf('|')
             if (i > 0) ln.substring(0, i).toLongOrNull()?.let { resume[ln.substring(i + 1)] = it }
         }
-        panelDim = prefs.getInt("dim", 95).coerceIn(DIM_MIN, 100)
+        panelDim = prefs.getInt("dim", 50).coerceIn(DIM_MIN, 100)
         repo = Repository(this, prefs)
         updates = UpdateFlow(this, prefs, { toast(it) }) { runOnUiThread { refreshRail(); refreshUpdateUi() } }
         // commit(): при обновлении приложения установчик убивает процесс, и асинхронная запись (apply) может не успеть —
@@ -621,7 +621,7 @@ class MainActivity : Activity() {
             })
             addView(arInfo)
         }
-        arPanel = panel(arHead, dayList, progList, 0.57f, Gravity.END)
+        arPanel = panel(arHead, dayList, progList, 0.64f, Gravity.END)
 
         // группы каналов: список свёрнут и разворачивается значком ☰ в левой полосе; OK — показать группу
         grpList.onItemClickListener = AdapterView.OnItemClickListener { _, _, pos, _ -> selectGroup(ad(grpList).row(pos).title) }
@@ -806,13 +806,29 @@ class MainActivity : Activity() {
         v.setTextColor(ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(Theme.onAccent, idle)))
     }
 
+    /** Ширина списка каналов в долях экрана: 0.36, при развёрнутых группах — 0.55. */
+    private fun chPanelFrac() = if (groupsOpen) 0.55f else 0.36f
+
+    /**
+     * Ширина архива: экран минус список каналов, если он виден, — тогда вместе они закрывают экран без промежутка.
+     * Когда архив открыт один (список скрыт), панель шире обычного списка.
+     */
+    private fun fitArchPanel() {
+        val lp = arPanel.layoutParams
+        val frac = if (chPanel.visibility == View.VISIBLE) 1f - chPanelFrac() else 0.64f
+        lp.width = (resources.displayMetrics.widthPixels * frac).toInt()
+        arPanel.layoutParams = lp
+    }
+
     /** Разворачивает / сворачивает список групп рядом с каналами; панель при этом расширяется, чтобы каналы не сжимались. */
     private fun setGroupsOpen(on: Boolean) {
         groupsOpen = on
         grpList.visibility = if (on) View.VISIBLE else View.GONE
         val lp = chPanel.layoutParams
-        lp.width = (resources.displayMetrics.widthPixels * (if (on) 0.55f else 0.36f)).toInt()
+        lp.width = (resources.displayMetrics.widthPixels * chPanelFrac()).toInt()
         chPanel.layoutParams = lp
+        // при открытом архиве его ширина зависит от ширины списка каналов
+        if (arPanel.visibility == View.VISIBLE) fitArchPanel()
         refreshRail()
     }
 
@@ -1486,7 +1502,7 @@ class MainActivity : Activity() {
             Row(when (i) { 0 -> L.t("Сегодня"); 1 -> L.t("Вчера"); else -> f.format(Date(System.currentTimeMillis() - i * 86400000L)) })
         })
         dayOff = 0
-        if (keepChannels) { setGroupsOpen(false); hudBox.visibility = View.GONE; seekBox.visibility = View.GONE; arPanel.visibility = View.VISIBLE }
+        if (keepChannels) { setGroupsOpen(false); hudBox.visibility = View.GONE; seekBox.visibility = View.GONE; arPanel.visibility = View.VISIBLE; fitArchPanel() }
         else showPanel(arPanel)
         renderProgs()
         progList.requestFocus()
