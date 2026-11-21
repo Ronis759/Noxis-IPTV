@@ -623,7 +623,7 @@ class MainActivity : Activity() {
             })
             addView(arInfo)
         }
-        arPanel = panel(arHead, dayList, progList, 0.64f, Gravity.END)
+        arPanel = panel(arHead, dayList, progList, panelFrac(), Gravity.END)
 
         // группы каналов: список свёрнут и разворачивается значком ☰ в левой полосе; OK — показать группу
         grpList.onItemClickListener = AdapterView.OnItemClickListener { _, _, pos, _ -> selectGroup(ad(grpList).row(pos).title) }
@@ -722,12 +722,14 @@ class MainActivity : Activity() {
         rebuildCategoryRail()
         chTitle.setTextColor(Color.WHITE); chTitle.setPadding(0, 0, 0, dp(10))
         val lists = LinearLayout(this).apply {
-            addView(grpList, LinearLayout.LayoutParams((w * 0.22f).toInt(), -1))
-            addView(chList, LinearLayout.LayoutParams(0, -1, 1f))
+            // при развёрнутых группах список каналов довольно узкий: панель больше не расширяется (половина экрана,
+            // как и архив), поэтому группы занимают около трети ширины панели
+            addView(grpList, LinearLayout.LayoutParams(0, -1, 1.4f))
+            addView(chList, LinearLayout.LayoutParams(0, -1, 2.6f))
         }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(8), dp(20), dp(20), dp(20))
+            setPadding(dp(8), dp(20), dp(12), dp(20))
             addView(chTitle)
             addView(lists, LinearLayout.LayoutParams(-1, 0, 1f))
         }
@@ -738,7 +740,7 @@ class MainActivity : Activity() {
             addView(rail, LinearLayout.LayoutParams(dp(60), -1))
             addView(content, LinearLayout.LayoutParams(0, -1, 1f))
         }
-        root.addView(chPanel, FrameLayout.LayoutParams((w * 0.36f).toInt(), -1, Gravity.START))
+        root.addView(chPanel, FrameLayout.LayoutParams((w * (1f - panelFrac())).toInt(), -1, Gravity.START))
         setGroupsOpen(false)
     }
 
@@ -808,32 +810,30 @@ class MainActivity : Activity() {
         v.setTextColor(ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(Theme.onAccent, idle)))
     }
 
-    /** Ширина списка каналов в долях экрана: 0.36, при развёрнутых группах — 0.55. */
-    private fun chPanelFrac() = if (groupsOpen) 0.55f else 0.36f
+    /** Ширина панели (список каналов и архив) — постоянная половина экрана. */
+    private fun panelFrac() = 0.5f
 
     /**
-     * Ширина архива: экран минус список каналов, если он виден, — тогда вместе они закрывают экран без промежутка.
-     * Когда архив открыт один (список скрыт), панель шире обычного списка.
+     * Список каналов и архив всегда одной ширины — половина экрана, при любом режиме (с развёрнутыми
+     * и со свёрнутыми группами). Вместе они закрывают экран без промежутка.
      * Панель архива создаётся позже списка каналов, а setGroupsOpen(false) вызывается уже в buildChPanel():
      * пока arPanel не создан, подгонять нечего.
      */
     private fun fitArchPanel() {
         if (!::arPanel.isInitialized || !::chPanel.isInitialized) return
-        val lp = arPanel.layoutParams
-        val frac = if (chPanel.visibility == View.VISIBLE) 1f - chPanelFrac() else 0.64f
-        lp.width = (resources.displayMetrics.widthPixels * frac).toInt()
-        arPanel.layoutParams = lp
+        val total = resources.displayMetrics.widthPixels
+        val lp = chPanel.layoutParams
+        lp.width = (total * (1f - panelFrac())).toInt()
+        chPanel.layoutParams = lp
+        val al = arPanel.layoutParams
+        al.width = (total * panelFrac()).toInt()
+        arPanel.layoutParams = al
     }
 
-    /** Разворачивает / сворачивает список групп рядом с каналами; панель при этом расширяется, чтобы каналы не сжимались. */
+    /** Разворачивает / сворачивает список групп. Ширина панели не меняется: группы помещаются внутри той же половины экрана. */
     private fun setGroupsOpen(on: Boolean) {
         groupsOpen = on
         grpList.visibility = if (on) View.VISIBLE else View.GONE
-        val lp = chPanel.layoutParams
-        lp.width = (resources.displayMetrics.widthPixels * chPanelFrac()).toInt()
-        chPanel.layoutParams = lp
-        // при открытом архиве его ширина зависит от ширины списка каналов (arPanel создаётся позже — проверяем готовность)
-        if (::arPanel.isInitialized && arPanel.visibility == View.VISIBLE) fitArchPanel()
         refreshRail()
     }
 
@@ -1507,8 +1507,8 @@ class MainActivity : Activity() {
             Row(when (i) { 0 -> L.t("Сегодня"); 1 -> L.t("Вчера"); else -> f.format(Date(System.currentTimeMillis() - i * 86400000L)) })
         })
         dayOff = 0
-        if (keepChannels) { setGroupsOpen(false); hudBox.visibility = View.GONE; seekBox.visibility = View.GONE; arPanel.visibility = View.VISIBLE; fitArchPanel() }
-        else showPanel(arPanel)
+        if (keepChannels) { setGroupsOpen(false); hudBox.visibility = View.GONE; seekBox.visibility = View.GONE; fitArchPanel(); arPanel.visibility = View.VISIBLE }
+        else { showPanel(arPanel); fitArchPanel() }
         renderProgs()
         progList.requestFocus()
     }
