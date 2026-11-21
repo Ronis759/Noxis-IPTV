@@ -42,12 +42,12 @@ class RowAdapter(private val ctx: Context) : BaseAdapter() {
         val box = (cv as? LinearLayout) ?: LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(px(12), px(8), px(12), px(8))
+            setPadding(px(6), px(8), px(10), px(8))
             // 0: логотип
-            addView(ImageView(ctx).apply { scaleType = ImageView.ScaleType.FIT_CENTER }, LinearLayout.LayoutParams(px(60), px(40)))
+            addView(ImageView(ctx).apply { scaleType = ImageView.ScaleType.FIT_CENTER }, LinearLayout.LayoutParams(px(48), px(36)))
             // 1: название, передача, полоса прогресса
             val lp = LinearLayout.LayoutParams(0, -2, 1f)
-            lp.leftMargin = px(12)
+            lp.leftMargin = px(8)
             addView(LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
                 addView(TextView(ctx).apply { textSize = 20f; maxLines = 1; ellipsize = TextUtils.TruncateAt.END })
@@ -59,7 +59,7 @@ class RowAdapter(private val ctx: Context) : BaseAdapter() {
                 }, LinearLayout.LayoutParams(-1, px(3)).apply { topMargin = px(5) })
             }, lp)
             // 2: значки справа
-            addView(TextView(ctx).apply { maxLines = 1; setTextColor(Theme.accent) }, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = px(10) })
+            addView(TextView(ctx).apply { maxLines = 1; setTextColor(Theme.accent) }, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = px(8) })
         }
         val r = rows[i]
         val comp = compact

@@ -108,6 +108,8 @@ class MainActivity : Activity() {
     private lateinit var btAddPlaylist: Button
     private var pendingLocalPlaylistName = ""
     private var pendingLocalPlaylistKey = ""
+    // окно «Добавить плейлист»: его нужно убрать, когда выбранный файл загрузится (иначе оно висит поверх каналов)
+    private var addPlaylistDlg: android.app.AlertDialog? = null
     private lateinit var btAdv: Button
     private lateinit var advBox: LinearLayout
     private lateinit var btEpgSection: Button
@@ -712,7 +714,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             setBackgroundColor(Theme.deep)
-            setPadding(dp(6), dp(16), dp(6), dp(16))
+            setPadding(dp(2), dp(16), dp(2), dp(16))
             addView(railUpd); addView(railSet); addView(railArc); addView(railFav)
             for (b in categoryRail) addView(b)
             addView(railGrp)
@@ -725,7 +727,7 @@ class MainActivity : Activity() {
         }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(20), dp(20), dp(20))
+            setPadding(dp(8), dp(20), dp(20), dp(20))
             addView(chTitle)
             addView(lists, LinearLayout.LayoutParams(-1, 0, 1f))
         }
@@ -733,7 +735,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(panelColor())
             visibility = View.GONE
-            addView(rail, LinearLayout.LayoutParams(dp(68), -1))
+            addView(rail, LinearLayout.LayoutParams(dp(60), -1))
             addView(content, LinearLayout.LayoutParams(0, -1, 1f))
         }
         root.addView(chPanel, FrameLayout.LayoutParams((w * 0.36f).toInt(), -1, Gravity.START))
@@ -2244,6 +2246,7 @@ class MainActivity : Activity() {
     }
 
     /** Добавляет текущий адрес в список плейлистов, не заменяя уже сохранённые. */
+    /** Диалог «＋ Добавить плейлист»: название, ссылка или локальный файл. Файл сразу становится текущим источником. */
     private fun showAddPlaylistDialog() {
         val name = EditText(this).apply { hint = L.t("Название плейлиста") }
         val url = EditText(this).apply { hint = L.t("Ссылка на M3U (необязательно)") }
@@ -2258,7 +2261,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0)
             addView(name); addView(url); addView(pick)
         }
-        android.app.AlertDialog.Builder(this).setTitle(L.t("Добавить плейлист")).setView(box)
+        addPlaylistDlg = android.app.AlertDialog.Builder(this).setTitle(L.t("Добавить плейлист")).setView(box)
             .setNegativeButton(L.t("Закрыть"), null)
             .setPositiveButton(L.t("Сохранить ссылку"), null)
             .create().also { d ->
@@ -2330,7 +2333,7 @@ class MainActivity : Activity() {
 
     private fun openServers() {
         val l = (repo.servers() + savedPlaylists()).distinctBy { it.pl }
-        if (l.isEmpty()) { toast(L.t("Список серверов пуст. Загрузите servers.txt кнопкой «Загрузить файл…»")); openSetup(); return }
+        if (l.isEmpty()) { toast(L.t("Список серверов пуст. Выберите «Выбрать сервер» → «＋ Добавить плейлист» и выберите файл")); openSetup(); return }
         val selected = l.map { it.pl in selectedPlaylists() }.toBooleanArray()
         android.app.AlertDialog.Builder(this)
             .setTitle(L.t("Выберите плейлисты"))
@@ -2617,14 +2620,18 @@ class MainActivity : Activity() {
                     val bytes = (contentResolver.openInputStream(u) ?: throw IOException(L.t("нет доступа к файлу")))
                         .use { Iptv.readLimited(it, Iptv.MAX_PLAYLIST) }
                     val t = Iptv.text(bytes)
-                      val isPlaylist = repo.importText(t, pendingLocalPlaylistKey.ifEmpty { "local" })
+                    val isPlaylist = repo.importText(t, pendingLocalPlaylistKey.ifEmpty { "local" })
+                    val localName = pendingLocalPlaylistName
+                    val localKey = pendingLocalPlaylistKey
+                    pendingLocalPlaylistName = ""; pendingLocalPlaylistKey = ""
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
-                          if (isPlaylist) {
-                              if (pendingLocalPlaylistName.isNotEmpty()) savePlaylist(pendingLocalPlaylistName, pendingLocalPlaylistKey.ifEmpty { "local" }, "")
-                              pendingLocalPlaylistName = ""; pendingLocalPlaylistKey = ""
-                              closePanels(); loadAll(false)
-                          }
+                        addPlaylistDlg?.dismiss(); addPlaylistDlg = null
+                        if (isPlaylist) {
+                            if (localName.isNotEmpty()) savePlaylist(localName, localKey.ifEmpty { "local" }, "")
+                            toast(L.t("Плейлист добавлен"))
+                            closePanels(); loadAll(false)
+                        }
                         else if (Iptv.parseServers(t).isEmpty()) toast(L.t("В файле нет адресов. Формат: Название | http://… | EPG"))
                         else openServers()
                     }

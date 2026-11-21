@@ -38,12 +38,20 @@ class Repository(private val ctx: Context, private val prefs: SharedPreferences)
     /**
      * Сохраняет выбранный пользователем файл: плейлист (есть #EXTINF) — как локальный, иначе — как servers.txt.
      * Читать и писать нужно из фонового потока. true — это был плейлист.
+     * [key] — «local» или «local:метка». В имени файла метка без префикса «local:»:
+     * раньше файл писался как «local_local:метка.m3u», а читался «local_метка.m3u» — выбранный файл «не добавлялся».
      */
     fun importText(t: String, key: String = "local"): Boolean {
         val isPlaylist = t.contains("#EXTINF")
         if (isPlaylist) {
-            File(ctx.filesDir, if (key == "local") "local.m3u" else "local_" + key + ".m3u").writeText(t)
-            prefs.edit().putString("pl", key).remove("srvn").apply()
+            val id = key.removePrefix("local:")
+            if (id.isEmpty()) {
+                File(ctx.filesDir, "local.m3u").writeText(t)
+                prefs.edit().putString("pl", "local").remove("srvn").remove("selected_playlists").apply()
+            } else {
+                File(ctx.filesDir, "local_$id.m3u").writeText(t)
+                prefs.edit().putString("pl", "local:$id").remove("srvn").remove("selected_playlists").apply()
+            }
         } else {
             File(ctx.filesDir, "servers.txt").writeText(t)
         }

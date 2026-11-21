@@ -160,7 +160,7 @@ object En {
         "Разработчик: " to "Developer: ",
         "О ПРОГРАММЕ" to "ABOUT",
         "ЧТО НОВОГО В ВЕРСИИ {0}" to "WHAT'S NEW IN VERSION {0}",
-        "Список серверов пуст. Загрузите servers.txt кнопкой «Загрузить файл…»" to "The server list is empty. Load servers.txt with the “Load file…” button",
+        "Список серверов пуст. Выберите «Выбрать сервер» → «＋ Добавить плейлист» и выберите файл" to "The server list is empty. Use “Choose server” → “＋ Add playlist” and pick a file",
         "нет окна выбора файлов" to "no file picker",
         "Нет выбора файлов. Положите servers.txt в " to "No file picker. Put servers.txt in ",
         "Нет окна выбора файлов — сохраняю в «Загрузки» и в папку приложения" to "No file picker — saving to Downloads and the app folder",
