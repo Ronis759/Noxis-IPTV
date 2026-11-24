@@ -58,6 +58,7 @@ object En {
         "Загрузка программы передач…" to "Loading TV guide…",
         "загрузка…" to "loading…",
         "Проверить обновления" to "Check for updates",
+        "Загрузка каналов…" to "Loading channels…",
         "О программе" to "About",
         "Показать все группы" to "Show all groups",
         "Источник" to "Source",

@@ -182,6 +182,7 @@ class MainActivity : Activity() {
     private val G_FAV = "★ Избранное"
     private val G_HIST = "◷ История"
     private val G_FIND = "⌕ Поиск…"
+    private val G_LOADING = "Загрузка каналов…"   // плейлиста ещё нет (первый запуск: показывается заголовок списка)
     private var grp = G_ALL
     private lateinit var favs: PrefSet           // избранные каналы (по Channel.okey), общие для всех плейлистов
     private lateinit var categories: ChannelCategories
@@ -230,7 +231,11 @@ class MainActivity : Activity() {
         override fun run() { if (hudBox.visibility == View.VISIBLE && arch != null) { updateHudProgress(); ui.postDelayed(this, 500) } }
     }
     private val hideHud = Runnable { hudBox.visibility = View.GONE }
-    private val showBuf = Runnable { bufView.visibility = View.VISIBLE }
+    // Кружок буферизации: при переключении канала поток ещё ни разу не играл — ждём 3 с,
+    // при подвисании во время просмотра — 2 с. Обычная задержка старта IPTV-потока остаётся незамеченной.
+    private val bufDelayFresh = 3000L
+    private val bufDelayStall = 2000L
+    private val showBuf = Runnable { if (!panelOpen()) bufView.visibility = View.VISIBLE }
     private val hideToast = Runnable { toastTv.visibility = View.GONE }
 
     // Таймер сна
@@ -301,7 +306,13 @@ class MainActivity : Activity() {
                 ui.removeCallbacks(stallRun)
                 ui.removeCallbacks(showBuf); bufView.visibility = View.GONE
                 when (state) {
-                    Player.STATE_BUFFERING -> { ui.postDelayed(stallRun, 20000); ui.postDelayed(showBuf, 700) }
+                    // Кружок показывается, только если поток действительно долго молчит:
+                    // при переключении канала поток ещё ни разу не играл — 3 с, при подвисании во время просмотра — 2 с.
+                    // Обычная задержка старта IPTV-потока (до 2 с) остаётся незамеченной.
+                    Player.STATE_BUFFERING -> {
+                        ui.postDelayed(stallRun, 20000)
+                        ui.postDelayed(showBuf, if (readyMode == null) bufDelayFresh else bufDelayStall)
+                    }
                     Player.STATE_READY -> {
                         readyMode = triedHls; retries = 0
                         // запоминаем рабочий формат архива для этого сервера
@@ -418,9 +429,9 @@ class MainActivity : Activity() {
             val d = getString(R.string.default_playlist)
             if (d.isNotEmpty()) {
                 prefs.edit().putString("pl", d).putString("epg", getString(R.string.default_epg)).apply()
-                loadAll()
+                loadAll(announce = false)
             } else openSetup()
-        } else if (keep) restoreSession() else loadAll()
+        } else if (keep) restoreSession() else loadAll(announce = false)
         refreshRail()
         updates.check(false)
     }
@@ -742,6 +753,7 @@ class MainActivity : Activity() {
         }
         root.addView(chPanel, FrameLayout.LayoutParams((w * (1f - panelFrac())).toInt(), -1, Gravity.START))
         setGroupsOpen(false)
+        refreshTitle()   // пустой список при запуске: в заголовке «Загрузка каналов…»
     }
 
     /** Значок левой полосы: только пиктограмма; подпись показывается в заголовке списка, пока значок выбран. */
@@ -762,11 +774,16 @@ class MainActivity : Activity() {
 
     /** Заголовок списка каналов: просто название группы; у выбранного значка полосы — его название. */
     /** Название группы для показа: служебные группы и «Без группы» переводятся, группы из плейлиста остаются как есть. */
-    private fun groupName(g: String) = if (g == G_ALL || g == G_FAV || g == G_HIST || g == G_FIND || g == "Без группы") L.t(g) else g
+    private fun groupName(g: String) = if (g == G_ALL || g == G_FAV || g == G_HIST || g == G_FIND || g == G_LOADING || g == "Без группы") L.t(g) else g
 
     private fun refreshTitle() {
         if (!::chTitle.isInitialized) return
-        val head = when (grp) { G_ALL -> L.t("Все каналы"); G_FIND -> L.f("Поиск «{0}»", query); else -> groupName(grp) }
+        val head = when (grp) {
+            // плейлист задан, но каналов ещё нет — идёт первая загрузка
+            G_ALL -> if (chans.isEmpty() && !(prefs.getString("pl", "") ?: "").isEmpty()) L.t(G_LOADING) else L.t("Все каналы")
+            G_FIND -> L.f("Поиск «{0}»", query)
+            else -> groupName(grp)
+        }
         chTitle.text = railHintText ?: head
     }
 
@@ -1301,6 +1318,13 @@ class MainActivity : Activity() {
         hudBox.visibility = View.GONE
         seekBox.visibility = View.GONE
         p?.visibility = View.VISIBLE
+        // кружок буферизации не висит поверх панели; после её закрытия вернётся, если поток всё ещё думает
+        if (::bufView.isInitialized) {
+            ui.removeCallbacks(showBuf)
+            bufView.visibility = View.GONE
+            if (p == null && ::player.isInitialized && player.playWhenReady && player.playbackState == Player.STATE_BUFFERING)
+                ui.postDelayed(showBuf, if (readyMode == null) bufDelayFresh else bufDelayStall)
+        }
     }
     private fun closePanels() { closeDialog(); showPanel(null) }
     private fun panelOpen() = chPanel.visibility == View.VISIBLE || arPanel.visibility == View.VISIBLE || setup.visibility == View.VISIBLE || srvPanel.visibility == View.VISIBLE
@@ -1706,7 +1730,7 @@ class MainActivity : Activity() {
         val ed = prefs.edit()
         if (newPl != oldPl) ed.remove("srvn")   // адрес изменили вручную — имя сервера уже не то
         ed.putString("pl", newPl).putString("epg", newEpg).putInt("tzm", newTz).apply()
-        if (newPl.isNotEmpty() && (newPl != oldPl || forcePlaylist || chans.isEmpty())) { loadAll(false); return 2 }
+        if (newPl.isNotEmpty() && (newPl != oldPl || forcePlaylist || chans.isEmpty())) { loadAll(false, announce = newPl != oldPl || forcePlaylist); return 2 }
         if (chans.isNotEmpty() && (newEpg != oldEpg || newTz != oldTz)) {
             toast(L.t("Загрузка программы передач…"))
             epgStatus = L.t("загрузка…")
@@ -1999,6 +2023,7 @@ class MainActivity : Activity() {
     private fun startUrl(url: String) {
         ui.removeCallbacks(retryRun)
         ui.removeCallbacks(stallRun)
+        ui.removeCallbacks(showBuf); bufView.visibility = View.GONE
         retries = 0
         readyMode = null
         playUrl(url)
@@ -2240,7 +2265,7 @@ class MainActivity : Activity() {
                 prefs.edit().putString("pl", sv.pl).putString("epg", sv.epg).putString("srvn", sv.name).apply()
                 closePanels()
                 // программа скачивается заново сама, если у нового сервера другой её адрес; принудительно — только по кнопке в настройках
-                if (same) toast(L.t("Этот сервер уже выбран")) else loadAll(false)
+                if (same) toast(L.t("Этот сервер уже выбран")) else loadAll(false, announce = false)
             }
         }
     }
@@ -2345,7 +2370,7 @@ class MainActivity : Activity() {
                     val urls = chosen.joinToString("\n") { it.pl }
                     prefs.edit().putString("selected_playlists", urls).putString("pl", urls).putString("srvn", chosen.joinToString(", ") { it.name }).apply()
                     etPl.setText(urls)
-                    loadAll(false)
+                    loadAll(false, announce = false)
                 }
             }.show()
         return
@@ -2645,25 +2670,45 @@ class MainActivity : Activity() {
     }
 
     /* ---------- загрузка данных ---------- */
-    /** Показывает каналы: группа при запуске, текущий канал, значки меню. Вызывать из потока интерфейса. */
-    private fun applyChannels(ch: List<Channel>, msg: String) {
+    /**
+     * Показывает каналы: группа при запуске, текущий канал, значки меню. Вызывать из потока интерфейса.
+     * [quiet] — канал уже играет: не перезапускать звук и не сбрасывать позицию в списке
+     * (копия плейлиста показана сразу, а свежий список доехал секундой позже).
+     */
+    private fun applyChannels(ch: List<Channel>, msg: String, quiet: Boolean = false) {
         chans = ch
         groups = ch.map { it.group }.distinct()
         val sm = prefs.getString("start", "fav")
         val lg = prefs.getString("lgrp", G_ALL) ?: G_ALL
         val startFav = sm == "fav" && ch.any { isFav(it) }
-        grp = when {
-            startFav -> G_FAV
-            sm == "last" && (lg == G_FAV || lg == G_HIST || (lg in groups && lg !in hiddenGroups)) -> lg
-            else -> G_ALL
+        // выбранная группа (категория) сохраняется при обновлении списка, если она ещё существует
+        val keepGrp = grp != G_ALL && grp != G_FAV && grp != G_HIST && grp != G_FIND && (grp in groups || grp in categories.names())
+        if (!keepGrp || chans.isEmpty()) {
+            grp = when {
+                startFav -> G_FAV
+                sm == "last" && (lg == G_FAV || lg == G_HIST || (lg in groups && lg !in hiddenGroups)) -> lg
+                else -> G_ALL
+            }
+            zapGrp = if (startFav) G_FAV else null
         }
-        zapGrp = if (startFav) G_FAV else null
         if (msg.isNotEmpty()) toast(msg)
         val plKey = Integer.toHexString((prefs.getString("pl", "") ?: "").hashCode())
         val lk = prefs.getString("lastk_$plKey", prefs.getString("lastk", "")) ?: ""
         val first = ch.firstOrNull { lk.isNotEmpty() && it.okey == lk } ?: ch.getOrElse(prefs.getInt("last", 0)) { ch[0] }
-        // приложение свёрнуто — не запускаем звук в фоне, onStart сам включит выбранный канал
-        if (started) playChan(first) else { cur = first; arch = null }
+        val playing = cur
+        when {
+            // тот же канал уже в эфире — просто обновляем строки списка
+            quiet && playing != null && ch.any { it === playing } -> Unit
+            // канал сохранился по ключу, но объект новый: переносим воспроизведение на него, не перезапуская поток
+            quiet && playing != null -> {
+                val same = ch.firstOrNull { it.okey == playing.okey }
+                if (same != null) cur = same else if (started) playChan(first) else cur = first
+            }
+            started -> playChan(first)
+            // приложение свёрнуто — не запускаем звук в фоне, onStart сам включит выбранный канал
+            else -> { cur = first; arch = null }
+        }
+        renderChans()   // заодно обновляет заголовок: «Загрузка каналов…» → «Все каналы»
         renderGroupsCard()
         refreshRail()
         if (reopenSetup) { reopenSetup = false; openSetup() }
@@ -2683,33 +2728,70 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun loadAll(force: Boolean = false) {
+    /**
+     * Загрузка каналов: сначала сразу показывается сохранённая копия плейлиста (а стекло каналов и программа
+     * появляются мгновенно), затем в фоне список обновляется с сервера и, если он изменился, заменяется.
+     * [force] — обновить программу передач принудительно; [announce] — показывать «Загрузка плейлиста…»
+     * и итоговое сообщение (ручное обновление). При запуске и возврате в приложение всё тихо.
+     */
+    private fun loadAll(force: Boolean = false, announce: Boolean = true) {
         val gen = ++loadGen   // результаты более ранних загрузок будут отброшены
         val pl = prefs.getString("pl", "") ?: ""
         val tz = tzMin()
         // программа остаётся на экране, пока грузится плейлист; сбрасываем её только при переходе на другой плейлист
         if (pl != Session.pl) { epg = emptyMap(); Session.epg = emptyMap(); epgStatus = L.t("загрузка…") }
-        toast(L.t("Загрузка плейлиста…"))
+        if (announce) toast(L.t("Загрузка плейлиста…"))
+        val sources = (prefs.getString("selected_playlists", null) ?: pl).split("\n").map { it.trim() }
+            .filter { it.isNotEmpty() }.ifEmpty { listOf(pl) }
+        val haveChannels = chans.isNotEmpty()   // список уже на экране — кэш не подставляем
         Thread {
             try {
-                val stored = prefs.getString("selected_playlists", null)
-                val sourceText = stored ?: pl
-                val sources = sourceText.split("\n").map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { listOf(pl) }
+                // 1. Копия плейлиста с прошлого раза: показываем сразу, не дожидаясь сети
+                var cachedChannels: List<Channel> = emptyList()
+                if (!force && !haveChannels) {
+                    val cached = sources.mapNotNull { repo.loadCachedPlaylist(it) }
+                    if (cached.isNotEmpty()) {
+                        cachedChannels = cached.flatMap { it.list.ch }.mapIndexed { i, c -> c.apply { okey = "$name#$i" } }
+                        val cachedEpgUrl = cached.map { it.list.epgUrl }.firstOrNull { it.isNotEmpty() } ?: ""
+                        runOnUiThread {
+                            if (gen != loadGen || isFinishing || isDestroyed || chans.isNotEmpty()) return@runOnUiThread
+                            applyChannels(cachedChannels, "", quiet = true)
+                            Session.chans = chans; Session.groups = groups; Session.pl = pl; Session.plEpgUrl = cachedEpgUrl
+                        }
+                        // программа передач — из кэша, параллельно с загрузкой плейлиста
+                        loadEpgNow(cachedChannels, cachedEpgUrl, false, tz, gen, silent = true)
+                    }
+                }
+
+                // 2. Свежий плейлист с сервера
                 val loaded = sources.map { repo.loadPlaylist(it) }
                 val channels = loaded.flatMap { it.list.ch }.mapIndexed { i, c -> c.apply { okey = "$name#$i" } }
                 val epgUrl = loaded.map { it.list.epgUrl }.firstOrNull { it.isNotEmpty() } ?: ""
                 val fromCache = loaded.any { it.fromCache }
                 if (gen != loadGen) return@Thread
+                // тот же список, что уже показан из кэша, — не перерисовываем его и не перезапускаем канал
+                val same = cachedChannels.isNotEmpty() && cachedChannels.size == channels.size &&
+                    cachedChannels.indices.all { cachedChannels[it].name == channels[it].name && cachedChannels[it].url == channels[it].url }
+                if (same) {
+                    plEpgUrl = epgUrl
+                    loadEpgNow(channels, epgUrl, force, tz, gen, silent = !announce)
+                    return@Thread
+                }
+                val msg = when {
+                    !announce -> ""
+                    fromCache -> L.f("Сервер недоступен — показан сохранённый список: {0}", channels.size)
+                    else -> L.f("Каналов: {0}", channels.size)
+                }
                 runOnUiThread {
                     if (gen != loadGen || isFinishing || isDestroyed) return@runOnUiThread
-                    applyChannels(channels, if (fromCache) L.f("Сервер недоступен — показан сохранённый список: {0}", channels.size) else L.f("Каналов: {0}", channels.size))
+                    applyChannels(channels, msg, quiet = cachedChannels.isNotEmpty())
                     Session.chans = chans; Session.groups = groups; Session.pl = pl; Session.plEpgUrl = epgUrl
                 }
                 if (gen != loadGen) return@Thread
                 plEpgUrl = epgUrl
                 loadEpgNow(channels, epgUrl, force, tz, gen)
             } catch (e: Exception) {
-                runOnUiThread { if (gen == loadGen) { toast(L.t("Ошибка: ") + Iptv.safeMsg(e)); if (chans.isEmpty()) openSetup() } }
+                runOnUiThread { if (gen == loadGen && chans.isEmpty()) { toast(L.t("Ошибка: ") + Iptv.safeMsg(e)); openSetup() } }
             }
         }.start()
     }

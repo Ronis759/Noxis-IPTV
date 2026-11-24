@@ -58,13 +58,21 @@ class Repository(private val ctx: Context, private val prefs: SharedPreferences)
         return isPlaylist
     }
 
+    /**
+     * Сохранённая копия плейлиста [pl] без обращения к сети: экран заполняется сразу при запуске.
+     * null — копии ещё нет или файл пуст/битый. Вызывать из фонового потока.
+     */
+    fun loadCachedPlaylist(pl: String): Loaded? = try {
+        val f = playlistFile(ctx.filesDir, pl)
+        if (f.exists()) Iptv.parseM3u(f.readText()).takeIf { it.ch.isNotEmpty() }?.let { Loaded(it, true) } else null
+    } catch (e: Exception) { null }
+
     /** Загружает плейлист [pl] (адрес или «local»); при недоступном сервере берёт сохранённую копию. Вызывать из фонового потока. */
     fun loadPlaylist(pl: String): Loaded {
         File(ctx.filesDir, "pl.m3u").delete()   // старый общий кэш: он не различал серверы
-        val f = File(ctx.filesDir, "pl_" + Integer.toHexString(pl.hashCode()) + ".m3u")
+        val f = playlistFile(ctx.filesDir, pl)
         var cached = false
-        val txt = if (pl == "local") File(ctx.filesDir, "local.m3u").readText()
-        else if (pl.startsWith("local:")) File(ctx.filesDir, "local_" + pl.removePrefix("local:") + ".m3u").readText()
+        val txt = if (pl.startsWith("local")) f.readText()
         else try { Iptv.text(Iptv.http(pl)).also { f.writeText(it) } }
         catch (e: Exception) { if (f.exists()) { cached = true; f.readText() } else throw e }
         val list = Iptv.parseM3u(txt)
@@ -146,5 +154,15 @@ class Repository(private val ctx: Context, private val prefs: SharedPreferences)
     companion object {
         /** Файл программы старше этого возраста скачивается заново. */
         const val EPG_MAX_AGE_MS = 6 * 3600000L
+
+        /**
+         * Где хранится плейлист [pl]: локальный файл лежит под своим именем, остальные — в кэше по хэшу адреса.
+         * Метка локального плейлиста («local:метка») в имени файла идёт без префикса «local:».
+         */
+        fun playlistFile(dir: File, pl: String): File = when {
+            pl == "local" -> File(dir, "local.m3u")
+            pl.startsWith("local:") -> File(dir, "local_" + pl.removePrefix("local:") + ".m3u")
+            else -> File(dir, "pl_" + Integer.toHexString(pl.hashCode()) + ".m3u")
+        }
     }
 }
