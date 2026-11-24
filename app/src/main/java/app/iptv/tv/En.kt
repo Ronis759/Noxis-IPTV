@@ -99,6 +99,8 @@ object En {
         ", в плейлисте нет catchup" to ", no catchup in the playlist",
         "Сегодня" to "Today",
         "Вчера" to "Yesterday",
+        "сегодня" to "today",
+        "вчера" to "yesterday",
         "Эфир " to "On air ",
         " · в эфире" to " · on air",
         " · ещё не было" to " · not aired yet",

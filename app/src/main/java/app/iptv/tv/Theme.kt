@@ -11,16 +11,18 @@ object Theme {
         val id: String, val name: String,
         val accent: Int, val onAccent: Int, val panel: Int, val deep: Int,
         val card: Int, val cardStroke: Int, val btn: Int, val stroke: Int,
-        val field: Int, val fieldFocus: Int, val gray: Int
+        val field: Int, val fieldFocus: Int, val gray: Int,
+        /** Текст второй строки списка (телепрограмма): светлее [gray], чтобы читался и на подсветке выбранной строки. */
+        val sub: Int
     )
 
     val all = listOf(
-        Scheme("teal", "Бирюзовая", 0x6FE3C1, 0x06231B, 0x101519, 0x0F1519, 0x151D23, 0x202B32, 0x26323B, 0x3A4A54, 0x1B252C, 0x24343D, 0x8A9AA5),
-        Scheme("blue", "Синяя", 0x6CB6FF, 0x071A2E, 0x0E1320, 0x0D111C, 0x141B2B, 0x1F2A40, 0x24304A, 0x3A4A6B, 0x1A2338, 0x243252, 0x8A98B5),
-        Scheme("amber", "Янтарная", 0xFFB84D, 0x2B1A00, 0x161310, 0x14110E, 0x1E1A15, 0x2D2820, 0x332D24, 0x54493A, 0x262119, 0x3A3226, 0xA39A8A),
-        Scheme("purple", "Фиолетовая", 0xC39BFF, 0x1D0B38, 0x15111E, 0x130F1B, 0x1B1726, 0x2A2438, 0x2E2840, 0x4D4566, 0x221D30, 0x322B47, 0x9A93B0),
-        Scheme("red", "Красная", 0xFF7A7A, 0x330909, 0x1A1111, 0x170F0F, 0x211717, 0x312222, 0x3A2828, 0x5E4141, 0x2A1D1D, 0x3E2A2A, 0xAD9393),
-        Scheme("contrast", "Контрастная (чёрная и жёлтая)", 0xFFE600, 0x000000, 0x000000, 0x000000, 0x0A0A0A, 0x444444, 0x1A1A1A, 0x777777, 0x0F0F0F, 0x2A2A00, 0xCCCCCC)
+        Scheme("teal", "Бирюзовая", 0x6FE3C1, 0x06231B, 0x101519, 0x0F1519, 0x151D23, 0x202B32, 0x26323B, 0x3A4A54, 0x1B252C, 0x24343D, 0x8A9AA5, 0xC3D3DC),
+        Scheme("blue", "Синяя", 0x6CB6FF, 0x071A2E, 0x0E1320, 0x0D111C, 0x141B2B, 0x1F2A40, 0x24304A, 0x3A4A6B, 0x1A2338, 0x243252, 0x8A98B5, 0xB9C8E4),
+        Scheme("amber", "Янтарная", 0xFFB84D, 0x2B1A00, 0x161310, 0x14110E, 0x1E1A15, 0x2D2820, 0x332D24, 0x54493A, 0x262119, 0x3A3226, 0xA39A8A, 0xD8CDBA),
+        Scheme("purple", "Фиолетовая", 0xC39BFF, 0x1D0B38, 0x15111E, 0x130F1B, 0x1B1726, 0x2A2438, 0x2E2840, 0x4D4566, 0x221D30, 0x322B47, 0x9A93B0, 0xC9C1DE),
+        Scheme("red", "Красная", 0xFF7A7A, 0x330909, 0x1A1111, 0x170F0F, 0x211717, 0x312222, 0x3A2828, 0x5E4141, 0x2A1D1D, 0x3E2A2A, 0xAD9393, 0xD8C0C0),
+        Scheme("contrast", "Контрастная (чёрная и жёлтая)", 0xFFE600, 0x000000, 0x000000, 0x000000, 0x0A0A0A, 0x444444, 0x1A1A1A, 0x777777, 0x0F0F0F, 0x2A2A00, 0xCCCCCC, 0xFFFFFF)
     )
 
     @Volatile var current: Scheme = all[0]
@@ -38,7 +40,8 @@ object Theme {
     val panel: Int get() = current.panel
     val hud: Int get() = alpha(0xEE, current.panel)
     val toast: Int get() = alpha(0xEE, current.btn)
-    val selector: Int get() = alpha(0x88, current.accent)
+    /** Подсветка выбранной строки: полупрозрачный акцент, чтобы текст второй строки оставался читаемым. */
+    val selector: Int get() = alpha(0x4D, current.accent)
     val deep: Int get() = opaque(current.deep)
     val card: Int get() = opaque(current.card)
     val cardStroke: Int get() = opaque(current.cardStroke)
@@ -47,4 +50,6 @@ object Theme {
     val field: Int get() = opaque(current.field)
     val fieldFocus: Int get() = opaque(current.fieldFocus)
     val gray: Int get() = opaque(current.gray)
+    /** Вторая строка списка (телепрограмма): светлее [gray]. */
+    val sub: Int get() = opaque(current.sub)
 }

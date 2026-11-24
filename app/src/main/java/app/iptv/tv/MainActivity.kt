@@ -88,7 +88,6 @@ class MainActivity : Activity() {
     private lateinit var setup: ScrollView
     private lateinit var grpList: ListView
     private lateinit var chList: ListView
-    private lateinit var dayList: ListView
     private lateinit var progList: ListView
     private lateinit var arTitle: TextView   // название канала в шапке архива
     private lateinit var arPrefix: TextView  // надпись «Архив:»
@@ -193,7 +192,6 @@ class MainActivity : Activity() {
     private var zapSnap: List<Channel> = emptyList()          // для «Истории» и поиска: список на момент выбора
     private var cur: Channel? = null
     private var arch: Prog? = null
-    private var dayOff = 0
     private var lastUrl = ""
     private var arcCands: List<Pair<Int, String>> = emptyList()   // варианты ссылки на архив
     private var arcIdx = 0
@@ -595,7 +593,8 @@ class MainActivity : Activity() {
         adapter = RowAdapter(this@MainActivity)
     }
 
-    private fun panel(title: View, a: ListView, b: ListView, frac: Float, g: Int): LinearLayout {
+    /** Панель справа или слева: заголовок и список под ним на всю ширину панели. */
+    private fun panel(title: View, b: ListView, frac: Float, g: Int): LinearLayout {
         val p = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(panelColor())
@@ -603,16 +602,13 @@ class MainActivity : Activity() {
             visibility = View.GONE
         }
         p.addView(title)
-        val row = LinearLayout(this)
-        row.addView(a, LinearLayout.LayoutParams(dp(120), -1))   // точная ширина задаётся в fitDayList()
-        row.addView(b, LinearLayout.LayoutParams(0, -1, 1f))
-        p.addView(row, LinearLayout.LayoutParams(-1, 0, 1f))
+        p.addView(b, LinearLayout.LayoutParams(-1, 0, 1f))
         root.addView(p, FrameLayout.LayoutParams((resources.displayMetrics.widthPixels * frac).toInt(), -1, g))
         return p
     }
 
     private fun buildPanels() {
-        grpList = lv(); chList = lv(); dayList = lv(); progList = lv()
+        grpList = lv(); chList = lv(); progList = lv()
         (chList.adapter as RowAdapter).icons = true
         chTitle = TextView(this).apply { textSize = 20f; maxLines = 2; text = L.t("Все каналы") }
         buildChPanel()
@@ -634,7 +630,7 @@ class MainActivity : Activity() {
             })
             addView(arInfo)
         }
-        arPanel = panel(arHead, dayList, progList, panelFrac(), Gravity.END)
+        arPanel = panel(arHead, progList, panelFrac(), Gravity.END)
 
         // группы каналов: список свёрнут и разворачивается значком ☰ в левой полосе; OK — показать группу
         grpList.onItemClickListener = AdapterView.OnItemClickListener { _, _, pos, _ -> selectGroup(ad(grpList).row(pos).title) }
@@ -666,11 +662,6 @@ class MainActivity : Activity() {
             }
             true
         }
-        dayList.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) { dayOff = pos; renderProgs() }
-            override fun onNothingSelected(p: AdapterView<*>?) {}
-        }
-        dayList.onItemClickListener = AdapterView.OnItemClickListener { _, _, _, _ -> progList.requestFocus() }
         progList.onItemClickListener = AdapterView.OnItemClickListener { _, _, pos, _ ->
             val p = ad(progList).row(pos).tag as? Prog
             val c = guide ?: cur
@@ -1525,37 +1516,58 @@ class MainActivity : Activity() {
         arTitle.text = c.name
         Logos.load(arLogo, c.logo, true)
         arInfo.text = L.f("тип: {0}, дней: {1}", archType(c), if (c.days > 0) c.days else 7) + (if (c.days == 0 && c.ctype.isEmpty() && c.csrc.isEmpty()) L.t(", в плейлисте нет catchup") else "")
-        val n = minOf(if (c.days > 0) c.days else 7, 14)
-        val f = SimpleDateFormat("dd.MM", Locale.getDefault())
-        ad(dayList).set((0..n).map { i ->
-            Row(when (i) { 0 -> L.t("Сегодня"); 1 -> L.t("Вчера"); else -> f.format(Date(System.currentTimeMillis() - i * 86400000L)) })
-        })
-        dayOff = 0
         if (keepChannels) { setGroupsOpen(false); hudBox.visibility = View.GONE; seekBox.visibility = View.GONE; fitArchPanel(); arPanel.visibility = View.VISIBLE }
         else { showPanel(arPanel); fitArchPanel() }
         renderProgs()
         progList.requestFocus()
     }
 
+    /**
+     * Передачи архива одним списком: сверху свежие, ниже — в прошлое. Колонки дней нет: дата стоит
+     * в начале каждой строки («сегодня», «вчера» или «дд.мм») и рисуется акцентным цветом.
+     */
     private fun renderProgs() {
         val c = guide ?: cur ?: return
+        val n = now()
+        val days = minOf(if (c.days > 0) c.days else 7, 14)
+        // граница архива — по календарю, а не по 86400 с: перевод часов не должен отрезать лишний час
+        val lim = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -days) }.timeInMillis / 1000
         val cal = Calendar.getInstance()
         cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0); cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
-        cal.add(Calendar.DAY_OF_YEAR, -dayOff)
-        val s0 = cal.timeInMillis / 1000
+        val dayStart = cal.timeInMillis / 1000
         cal.add(Calendar.DAY_OF_YEAR, 1)
-        val s1 = cal.timeInMillis / 1000
-        var l = (epg[c.eid] ?: emptyList()).filter { it.e > s0 && it.s < s1 }
-        if (l.isEmpty()) l = (0 until 24).map { Prog(s0 + it * 3600L, s0 + (it + 1) * 3600L, L.t("Эфир ") + hm(s0 + it * 3600L)) }
-        val n = now()
-        val lim = n - (if (c.days > 0) c.days else 7) * 86400L
+        val dayEnd = cal.timeInMillis / 1000   // программы следующих дней в архив не попадают
+        var l = (epg[c.eid] ?: emptyList())
+            .filter { it.e > it.s && it.e > lim && it.s < dayEnd }
+            .sortedByDescending { it.s }
+        // программы передач нет совсем — почасовая сетка на сегодня
+        if (l.isEmpty()) l = (0 until 24)
+            .map { Prog(dayStart + it * 3600L, dayStart + (it + 1) * 3600L, L.t("Эфир ") + hm(dayStart + it * 3600L)) }
+            .sortedByDescending { it.s }
+        val today = dayOf(n)
+        val yesterday = dayOf(Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }.timeInMillis / 1000)
+        val df = SimpleDateFormat("dd.MM", Locale.getDefault())
+        fun dateLabel(t: Long): String = when (dayOf(t)) {
+            today -> L.t("сегодня")
+            yesterday -> L.t("вчера")
+            else -> df.format(Date(t * 1000))
+        }
         ad(progList).set(l.map { p ->
-            val fut = p.s > n; val live = p.s <= n && n < p.e; val ok = p.e > lim
-            Row(p.title, hm(p.s) + "–" + hm(p.e) + when { live -> L.t(" · в эфире"); fut -> L.t(" · ещё не было"); !ok -> L.t(" · нет в архиве"); else -> "" }, p, fut || !ok)
+            val fut = p.s > n; val live = p.s <= n && n < p.e
+            Row(title = p.title,
+                sub = hm(p.s) + "–" + hm(p.e) + when { live -> L.t(" · в эфире"); fut -> L.t(" · ещё не было"); else -> "" },
+                tag = p, dim = fut, date = dateLabel(p.s))
         })
         var i = l.indexOfFirst { it.s <= n && n < it.e }
-        if (i < 0) i = l.indexOfLast { it.s <= n }
+        if (i < 0) i = l.indexOfFirst { it.s <= n }   // текущей передачи нет — ближайшая прошедшая
         progList.setSelection(i.coerceAtLeast(0))
+    }
+
+    /** Номер дня в местном времени (yyyyMMdd) — чтобы «сегодня» и «вчера» не зависели от перехода через полночь. */
+    private fun dayOf(t: Long): Int {
+        val cal = Calendar.getInstance()
+        cal.timeInMillis = t * 1000
+        return cal.get(Calendar.YEAR) * 10000 + (cal.get(Calendar.MONTH) + 1) * 100 + cal.get(Calendar.DAY_OF_MONTH)
     }
 
     private fun typeLabel() = L.f("Тип архива по умолчанию: {0}", ctype)
@@ -1767,15 +1779,6 @@ class MainActivity : Activity() {
         btFont.text = fontLabel()
     }
 
-    /** Колонка дат архива: ширина по самой длинной надписи «Сегодня», всё остальное место отдано передачам. */
-    private fun fitDayList() {
-        val paint = android.graphics.Paint()
-        paint.textSize = android.util.TypedValue.applyDimension(
-            android.util.TypedValue.COMPLEX_UNIT_SP, 20f * UiScale.f, resources.displayMetrics)
-        // в ширину строки входят отступы (12 + 12) и левое поле текста (12); +4 — запас, чтобы «Сегодня» не обрезалось
-        dayList.layoutParams = LinearLayout.LayoutParams(paint.measureText(L.t("Сегодня")).toInt() + dp(40), -1)
-    }
-
     /** Применяет масштаб шрифта к плашкам, сообщениям и всем спискам. */
     private fun applyFont() {
         val f = UiScale.f
@@ -1783,8 +1786,7 @@ class MainActivity : Activity() {
         seekT.textSize = 18f * f; seekL.textSize = 16f * f; seekR.textSize = 16f * f
         toastTv.textSize = 18f * f
         chTitle.textSize = 20f * f; arTitle.textSize = 24f * f; arPrefix.textSize = 24f * f; arInfo.textSize = 14f * f
-        fitDayList()
-        for (l in listOf(grpList, chList, dayList, progList, srvList)) ad(l).notifyDataSetChanged()
+        for (l in listOf(grpList, chList, progList, srvList)) ad(l).notifyDataSetChanged()
     }
 
     /* ---------- пропорции картинки ---------- */
@@ -2894,9 +2896,9 @@ class MainActivity : Activity() {
             return super.dispatchKeyEvent(e)
         }
         if (panelOpen()) {
-            // телепрограмма рядом со списком каналов: ← из списка дней или «Назад» возвращает к выбору канала
+            // телепрограмма рядом со списком каналов: «←» из списка передач или «Назад» возвращает к выбору канала
             if (arPanel.visibility == View.VISIBLE && chPanel.visibility == View.VISIBLE &&
-                (k == KeyEvent.KEYCODE_BACK || (k == KeyEvent.KEYCODE_DPAD_LEFT && dayList.hasFocus()))) {
+                (k == KeyEvent.KEYCODE_BACK || (k == KeyEvent.KEYCODE_DPAD_LEFT && progList.hasFocus()))) {
                 // BACK обрабатываем только на отпускание (иначе ACTION_UP после скрытия панели закрыл бы и список каналов), ← — на нажатие
                 val fire = if (k == KeyEvent.KEYCODE_BACK) e.action == KeyEvent.ACTION_UP
                 else e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0

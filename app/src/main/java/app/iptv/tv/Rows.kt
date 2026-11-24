@@ -4,6 +4,9 @@ import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.text.TextUtils
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -19,10 +22,11 @@ object UiScale { @Volatile var f = 1f }
 /**
  * Строка списка. [prog] — прогресс текущей передачи 0..1 (меньше нуля — без полосы),
  * [mark] — значки справа («▶» играет, «★» избранное, «⇅» переносится).
+ * [date] — дата перед временем в архиве («сегодня», «вчера», «21.11»): рисуется акцентным цветом.
  */
 class Row(
     val title: String, val sub: String = "", val tag: Any? = null, val dim: Boolean = false, val icon: String = "", val short: String = "",
-    val prog: Float = -1f, val mark: String = ""
+    val prog: Float = -1f, val mark: String = "", val date: String = ""
 )
 
 class RowAdapter(private val ctx: Context) : BaseAdapter() {
@@ -51,7 +55,7 @@ class RowAdapter(private val ctx: Context) : BaseAdapter() {
             addView(LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
                 addView(TextView(ctx).apply { textSize = 20f; maxLines = 1; ellipsize = TextUtils.TruncateAt.END })
-                addView(TextView(ctx).apply { textSize = 15f; maxLines = 1; ellipsize = TextUtils.TruncateAt.END; setTextColor(Theme.gray) })
+                addView(TextView(ctx).apply { textSize = 16f; maxLines = 1; ellipsize = TextUtils.TruncateAt.END; setTextColor(Theme.sub) })
                 addView(ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal).apply {
                     max = 1000
                     progressTintList = ColorStateList.valueOf(Theme.accent)
@@ -76,7 +80,18 @@ class RowAdapter(private val ctx: Context) : BaseAdapter() {
             gravity = if (comp) Gravity.CENTER_HORIZONTAL else Gravity.START
             setTextColor(if (r.title == active && active.isNotEmpty()) Theme.accent else if (r.dim) Theme.gray else Color.WHITE)
         }
-        (tx.getChildAt(1) as TextView).apply { textSize = 15f * UiScale.f; text = r.sub; visibility = if (r.sub.isEmpty() || comp) View.GONE else View.VISIBLE }
+        (tx.getChildAt(1) as TextView).apply {
+            textSize = 16f * UiScale.f
+            visibility = if ((r.sub.isEmpty() && r.date.isEmpty()) || comp) View.GONE else View.VISIBLE
+            if (r.date.isEmpty()) text = r.sub else {
+                // дата акцентным цветом, время и статус передачи — светлым, чтобы дата отличалась от названия
+                val full = r.date + "  " + r.sub
+                val sp = SpannableString(full)
+                sp.setSpan(ForegroundColorSpan(Theme.accent), 0, r.date.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                sp.setSpan(ForegroundColorSpan(Theme.sub), r.date.length, full.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                text = sp
+            }
+        }
         (tx.getChildAt(2) as ProgressBar).apply {
             visibility = if (r.prog >= 0f && !comp) View.VISIBLE else View.GONE
             progress = (r.prog.coerceIn(0f, 1f) * 1000).toInt()
