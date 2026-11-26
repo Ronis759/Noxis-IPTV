@@ -26,6 +26,10 @@ class Channel(
     var eid: String = ""
     /** Уникальный ключ для «своего порядка»: у дублей названия (один канал в разных группах) добавляется #2, #3… */
     var okey: String = name
+    /** Источник канала: адрес плейлиста или «local:метка». Пусто — источник неизвестен (старый кэш). */
+    var src: String = ""
+    /** Подпись источника для списка групп: имя сервера, имя файла или адрес. */
+    var srcName: String = ""
 }
 
 class Prog(val s: Long, val e: Long, val title: String, val description: String = "")
@@ -35,6 +39,8 @@ class HttpCodeException(val code: Int) : IOException("HTTP $code")
 class TooBigException(limit: Long) : IOException(L.f("Ответ слишком большой (лимит {0} МБ)", limit / 1048576))
 class Epg(val map: Map<String, List<Prog>>, val names: Map<String, String>, val ids: Map<String, String>)
 class Server(val name: String, val pl: String, val epg: String)
+/** Подключённый источник: [key] — адрес плейлиста или «local:метка», [name] — подпись для интерфейса. */
+class Source(val key: String, val name: String)
 
 object Iptv {
     const val DEFAULT_UA = "Mozilla/5.0 (Linux; Android TV) IPTV"

@@ -22,10 +22,13 @@ interface EpgListener {
 class Repository(private val ctx: Context, private val prefs: SharedPreferences) {
     class Loaded(val list: Playlist, val fromCache: Boolean)
 
-    /** Серверы из servers.txt (внутренняя и внешняя папки приложения). Нечитаемый файл пропускается и попадает в журнал. */
+    /** Серверы из server_IPTV.txt (новое имя) и servers.txt (старое), внутренняя и внешняя папки приложения. */
     fun servers(): List<Server> {
         val l = ArrayList<Server>()
-        for (f in listOfNotNull(File(ctx.filesDir, "servers.txt"), ctx.getExternalFilesDir(null)?.let { File(it, "servers.txt") })) {
+        val dirs = listOfNotNull(ctx.filesDir, ctx.getExternalFilesDir(null))
+        val names = listOf("server_IPTV.txt", "servers.txt")
+        for (d in dirs) for (n in names) {
+            val f = File(d, n)
             try {
                 if (f.exists()) l += Iptv.parseServers(Iptv.text(f.readBytes()))
             } catch (e: Exception) {
@@ -45,15 +48,10 @@ class Repository(private val ctx: Context, private val prefs: SharedPreferences)
         val isPlaylist = t.contains("#EXTINF")
         if (isPlaylist) {
             val id = key.removePrefix("local:")
-            if (id.isEmpty()) {
-                File(ctx.filesDir, "local.m3u").writeText(t)
-                prefs.edit().putString("pl", "local").remove("srvn").remove("selected_playlists").apply()
-            } else {
-                File(ctx.filesDir, "local_$id.m3u").writeText(t)
-                prefs.edit().putString("pl", "local:$id").remove("srvn").remove("selected_playlists").apply()
-            }
+            if (id.isEmpty()) File(ctx.filesDir, "local.m3u").writeText(t)
+            else File(ctx.filesDir, "local_$id.m3u").writeText(t)
         } else {
-            File(ctx.filesDir, "servers.txt").writeText(t)
+            File(ctx.filesDir, "server_IPTV.txt").writeText(t)
         }
         return isPlaylist
     }

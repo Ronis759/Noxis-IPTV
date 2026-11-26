@@ -16,6 +16,7 @@ import android.os.Handler
 import android.os.Looper
 import android.text.InputType
 import android.text.TextUtils
+import android.util.Log
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -57,10 +58,16 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
-/** Коды запросов выбора файла: 7 — servers.txt / плейлист, 8 — сохранить настройки, 9 — восстановить настройки. */
+/** Коды запросов выбора файла: 7 — плейлист или список серверов, 8 — сохранить настройки, 9 — восстановить настройки, 11 — server_IPTV.txt. */
 private const val RC_EXPORT = 8
 private const val RC_IMPORT = 9
 private const val RC_PERM = 10
+private const val RC_SERVERS = 11
+/** Сколько источников (плейлистов) можно подключить одновременно. */
+private const val MAX_SOURCES = Sources.MAX
+/** Ключ выбора источника в списке групп: «src:<ключ>» или «src:<ключ>\u0001<группа>». */
+private const val SRC_PREFIX = "src:"
+private const val SRC_SEP = "\u0001"
 
 /**
  * Экран на переднем плане: после recreate() (смена темы или языка) старый экран не показывает свои окна и сообщения.
@@ -104,11 +111,14 @@ class MainActivity : Activity() {
     private lateinit var tvStat: TextView
     private lateinit var tvSrv: TextView
     private lateinit var btServer: Button
-    private lateinit var btAddPlaylist: Button
+    private lateinit var btFileSrc: Button
+    private lateinit var btUrlSrc: Button
     private var pendingLocalPlaylistName = ""
     private var pendingLocalPlaylistKey = ""
-    // окно «Добавить плейлист»: его нужно убрать, когда выбранный файл загрузится (иначе оно висит поверх каналов)
-    private var addPlaylistDlg: android.app.AlertDialog? = null
+    /** Подключённые источники (для списка групп) и раскрытые в нём источники. */
+    private var sources: List<Source> = emptyList()
+    private var multiSrc = false
+    private val srcOpen = HashSet<String>()
     private lateinit var btAdv: Button
     private lateinit var advBox: LinearLayout
     private lateinit var btEpgSection: Button
@@ -633,17 +643,20 @@ class MainActivity : Activity() {
         arPanel = panel(arHead, progList, panelFrac(), Gravity.END)
 
         // группы каналов: список свёрнут и разворачивается значком ☰ в левой полосе; OK — показать группу
-        grpList.onItemClickListener = AdapterView.OnItemClickListener { _, _, pos, _ -> selectGroup(ad(grpList).row(pos).title) }
+        grpList.onItemClickListener = AdapterView.OnItemClickListener { _, _, pos, _ ->
+            val r = ad(grpList).row(pos)
+            if (r.tag == "src") selectSource(r.key) else selectGroup(r.key)
+        }
         // удержание OK на группе — скрыть её (вернуть: Настройки → Группы каналов)
         grpList.onItemLongClickListener = AdapterView.OnItemLongClickListener { _, _, pos, _ ->
             val r = ad(grpList).row(pos)
             if (r.tag == "g") {
-                toggleGroup(r.title)
-                toast(L.f("Группа скрыта: {0}. Вернуть: Настройки → Группы каналов", groupName(r.title)))
+                toggleGroup(r.key)
+                toast(L.f("Группа скрыта: {0}. Вернуть: Настройки → Группы каналов", groupName(r.key)))
                 onGroupsChanged()
                 grpList.setSelection(minOf(pos, ad(grpList).getCount() - 1))
             } else if (r.tag == "cat") {
-                showCategoryMenu(r.title)
+                showCategoryMenu(r.key)
             }
             true
         }
@@ -765,7 +778,58 @@ class MainActivity : Activity() {
 
     /** Заголовок списка каналов: просто название группы; у выбранного значка полосы — его название. */
     /** Название группы для показа: служебные группы и «Без группы» переводятся, группы из плейлиста остаются как есть. */
-    private fun groupName(g: String) = if (g == G_ALL || g == G_FAV || g == G_HIST || g == G_FIND || g == G_LOADING || g == "Без группы") L.t(g) else g
+    /* ---------- источники в списке групп ---------- */
+    /** Ключ источника из ключа выбора «src:<ключ>[\u0001<группа>]». null — это не источник. */
+    private fun srcSel(g: String): String? =
+        if (g.startsWith(SRC_PREFIX)) g.removePrefix(SRC_PREFIX).substringBefore(SRC_SEP) else null
+
+    /** Группа внутри источника (пусто — все каналы источника). */
+    private fun srcGrp(g: String): String = if (g.startsWith(SRC_PREFIX)) g.substringAfter(SRC_SEP, "") else ""
+
+    /** Ключ скрытой группы: при нескольких источниках — «источник\u0001группа», иначе просто название. */
+    private fun hideKey(src: String, group: String): String = if (multiSrc && src.isNotEmpty()) src + SRC_SEP + group else group
+
+    /** Ключ скрытия для выбранного пункта списка групп. */
+    private fun hideKeyOf(g: String): String {
+        val sk = srcSel(g) ?: return g
+        val gr = srcGrp(g)
+        return if (gr.isEmpty()) g else hideKey(sk, gr)
+    }
+
+    /** Скрыт ли выбранный пункт (группа источника или обычная группа). */
+    private fun isHiddenKey(g: String): Boolean = hideKeyOf(g) in hiddenGroups
+
+    /** Скрыт ли канал (его группа или весь источник скрыт в настройках). */
+    private fun isHiddenChannel(c: Channel): Boolean =
+        hideKey(c.src, c.group) in hiddenGroups || c.group in hiddenGroups ||
+            (c.src.isNotEmpty() && (SRC_PREFIX + c.src) in hiddenGroups)
+
+    /** Существует ли ещё выбранная группа: источник и группа есть в текущем списке. */
+    private fun validGroup(g: String): Boolean {
+        val sk = srcSel(g)
+        if (sk != null) {
+            if (sources.none { it.key == sk }) return false
+            val gr = srcGrp(g)
+            return gr.isEmpty() || chans.any { it.src == sk && it.group == gr }
+        }
+        return g in groups || g in categories.names()
+    }
+
+    /** Нажатие на источник: раскрывает его и показывает все его каналы. */
+    private fun selectSource(g: String) {
+        srcSel(g)?.let { srcOpen.add(it) }
+        selectGroup(g)
+    }
+
+    private fun groupName(g: String): String {
+        val sk = srcSel(g)
+        if (sk != null) {
+            val s = sources.firstOrNull { it.key == sk }?.name ?: sk
+            val gr = srcGrp(g)
+            return if (gr.isEmpty()) s else s + " · " + gr
+        }
+        return if (g == G_ALL || g == G_FAV || g == G_HIST || g == G_FIND || g == G_LOADING || g == "Без группы") L.t(g) else g
+    }
 
     private fun refreshTitle() {
         if (!::chTitle.isInitialized) return
@@ -851,7 +915,7 @@ class MainActivity : Activity() {
         ad(grpList).active = grp
         ad(grpList).set(rows)
         setGroupsOpen(true)
-        grpList.setSelection(rows.indexOfFirst { it.title == grp }.coerceAtLeast(0))
+        grpList.setSelection(rows.indexOfFirst { it.key == grp }.coerceAtLeast(0))
         grpList.requestFocus()
     }
 
@@ -876,7 +940,7 @@ class MainActivity : Activity() {
 
     /** Показ или скрытие группы изменилось: обновляем список групп, каналы и значки. */
     private fun onGroupsChanged() {
-        zapGrp?.let { if (it in hiddenGroups) zapGrp = null }
+        zapGrp?.let { if (isHiddenKey(it)) zapGrp = null }
         ad(grpList).set(groupRows())
         renderChans()
         refreshRail()
@@ -964,9 +1028,14 @@ class MainActivity : Activity() {
             textSize = 18f; setTextColor(Color.WHITE); setPadding(dp(2), 0, 0, dp(2))
             maxLines = 1; ellipsize = TextUtils.TruncateAt.END
         }
-        btServer = small(tvButton(L.t("⇄ Выбрать сервер"))).apply { setOnClickListener { openServers() } }
-        btAddPlaylist = small(tvButton(L.t("＋ Добавить плейлист"))).apply {
-            setOnClickListener { showAddPlaylistDialog() }
+        btFileSrc = small(tvButton(L.t("Выбрать из файла (M3U)"))).apply {
+            setOnClickListener { pickLocalPlaylist() }
+        }
+        btUrlSrc = small(tvButton(L.t("Ссылка на плейлист"))).apply {
+            setOnClickListener { showUrlsDialog() }
+        }
+        btServer = small(tvButton(L.t("Выбрать из списка серверов"))).apply {
+            setOnClickListener { showServersDialog() }
         }
         val btReload = small(tvButton(L.t("Обновить плейлист"))).apply {
             setOnClickListener { if (applySource(true) == 2) closePanels() }
@@ -1019,7 +1088,7 @@ class MainActivity : Activity() {
             })
         }
         btEpgSection = small(tvButton("")).apply {
-            text = "▸  " + L.t("Программа передач")
+            text = "▸  " + L.t("Программа передач (необязательно)")
             gravity = Gravity.START or Gravity.CENTER_VERTICAL
             setOnClickListener {
                 val open = epgBox.visibility != View.VISIBLE
@@ -1028,7 +1097,7 @@ class MainActivity : Activity() {
                     tzBox.visibility = View.GONE
                     btTzSection.text = "▸  " + L.t("Часовой пояс телепрограммы")
                 }
-                text = (if (open) "▾  " else "▸  ") + L.t("Программа передач")
+                text = (if (open) "▾  " else "▸  ") + L.t("Программа передач (необязательно)")
             }
         }
         btTzSection = small(tvButton("")).apply {
@@ -1039,7 +1108,7 @@ class MainActivity : Activity() {
                 tzBox.visibility = if (open) View.VISIBLE else View.GONE
                 if (open) {
                     epgBox.visibility = View.GONE
-                    btEpgSection.text = "▸  " + L.t("Программа передач")
+                    btEpgSection.text = "▸  " + L.t("Программа передач (необязательно)")
                 }
                 text = (if (open) "▾  " else "▸  ") + L.t("Часовой пояс телепрограммы")
             }
@@ -1047,7 +1116,6 @@ class MainActivity : Activity() {
         advBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
-            addView(label(L.t("Ссылка на плейлист (M3U)"))); addView(etPl)
             addView(btEpgSection); addView(epgBox)
             addView(btTzSection); addView(tzBox)
         }
@@ -1136,8 +1204,8 @@ class MainActivity : Activity() {
         }
         // ----- Раскрывающиеся вкладки (порядок на экране) -----
         section(L.t("Источник")) {
-            addView(label(L.t("Текущий сервер"))); addView(tvSrv)
-            addView(row(btServer, btAddPlaylist))
+            addView(label(L.t("Текущий источник"))); addView(tvSrv)
+            addView(btFileSrc); addView(btUrlSrc); addView(btServer)
             addView(btAdv); addView(advBox); addView(btApply)
         }
         section(L.t("Обновление")) { addView(btReload); addView(btUpd); addView(tvUpdStat); addView(tvStat) }
@@ -1370,13 +1438,30 @@ class MainActivity : Activity() {
         updates.check(false)   // не чаще раза в 6 часов; найденное обновление покажет значок в левой полосе
     }
 
-    /** Строки развёрнутого списка групп: «Все», история и нескрытые группы (избранное — отдельный значок ★). */
+    /** Строки развёрнутого списка групп: «Все», история, свои группы, затем источники с их группами. */
     private fun groupRows(): List<Row> {
         val l = ArrayList<Row>()
         l.add(Row(G_ALL, tag = "all"))
         l.add(Row(G_HIST, tag = "hist"))
-        for (name in categories.names()) if (name !in hiddenGroups) l.add(Row(name, "▣  пользовательская", tag = "cat"))
-        for (g in groups) if (g !in hiddenGroups) l.add(Row(g, tag = "g"))
+        for (name in categories.names()) if (name !in hiddenGroups) l.add(Row(name, "▣  " + L.t("пользовательская"), tag = "cat", key = name))
+        if (multiSrc) {
+            for (s in sources) {
+                val key = SRC_PREFIX + s.key
+                if (key in hiddenGroups) continue
+                val open = s.key in srcOpen
+                val count = chans.count { it.src == s.key }
+                l.add(Row((if (open) "▾ " else "▸ ") + s.name, L.f("каналов: {0}", count), tag = "src", key = key))
+                if (open) {
+                    val gs = chans.filter { it.src == s.key }.map { it.group }.distinct()
+                    for (g in gs) {
+                        if (g in hiddenGroups || hideKey(s.key, g) in hiddenGroups) continue
+                        l.add(Row("    " + g, "", tag = "g", key = key + SRC_SEP + g))
+                    }
+                }
+            }
+        } else {
+            for (g in groups) if (g !in hiddenGroups) l.add(Row(g, tag = "g", key = g))
+        }
         return l
     }
 
@@ -1436,12 +1521,16 @@ class MainActivity : Activity() {
 
     private fun renderChans() {
         val all = ordered()
-        shown = if (grp == G_FAV) all.filter { isFav(it) }
-        else if (grp == G_HIST) { val m = chans.associateBy { it.okey }; history.mapNotNull { m[it] } }
-        else if (grp == G_FIND) searchIn(all)
-        else if (grp == G_ALL) all.filter { it.group !in hiddenGroups }
-        else if (grp in categories.names()) all.filter { categories.contains(grp, it.okey) }
-        else all.filter { it.group == grp }
+        val sk = srcSel(grp)
+        shown = when {
+            grp == G_FAV -> all.filter { isFav(it) }
+            grp == G_HIST -> { val m = chans.associateBy { it.okey }; history.mapNotNull { m[it] } }
+            grp == G_FIND -> searchIn(all)
+            sk != null -> all.filter { it.src == sk && (srcGrp(grp).isEmpty() || it.group == srcGrp(grp)) }
+            grp == G_ALL -> all.filter { !isHiddenChannel(it) }
+            grp in categories.names() -> all.filter { categories.contains(grp, it.okey) }
+            else -> all.filter { it.group == grp }
+        }
         val sel = if (moving) chList.selectedItemPosition else -1
         val t = now()
         ad(chList).set(shown.mapIndexed { i, it ->
@@ -1504,7 +1593,7 @@ class MainActivity : Activity() {
     }
 
     private fun toggleGroup(g: String) {
-        val hidden = hiddenGroups.toggle(g)
+        val hidden = hiddenGroups.toggle(hideKeyOf(g))
         if (hidden && grp == g) grp = G_ALL
         if (hidden && zapGrp == g) zapGrp = null
     }
@@ -1572,14 +1661,17 @@ class MainActivity : Activity() {
 
     private fun typeLabel() = L.f("Тип архива по умолчанию: {0}", ctype)
 
-    /** Название выбранного сервера для экрана настроек. */
+    /** Название выбранных источников для экрана настроек. */
     private fun srvLabel(): String {
+        val l = selectedList()
         val pl = prefs.getString("pl", "") ?: ""
-        return when {
-            pl.isEmpty() -> L.t("не выбран")
-            pl == "local" -> L.t("локальный файл")
-            else -> (prefs.getString("srvn", "") ?: "").ifEmpty { Iptv.hostOf(pl) }
+        if (l.isEmpty()) return if (pl.isEmpty()) L.t("не выбран") else Iptv.hostOf(pl)
+        if (l.size == 1) {
+            val k = l[0]
+            return if (k == "local" || k.startsWith("local:")) L.t("локальный файл") else sourceName(k)
         }
+        val names = l.take(3).joinToString(", ") { sourceName(it) }
+        return L.f("источников: {0} — {1}", l.size, if (l.size > 3) names + "…" else names)
     }
 
     private fun setAdvanced(on: Boolean) {
@@ -1917,7 +2009,7 @@ class MainActivity : Activity() {
 
     /* ---------- поиск и номера каналов ---------- */
     /** Каналы с номерами: все нескрытые, в выбранном порядке. */
-    private fun numList(): List<Channel> = ordered().filter { it.group !in hiddenGroups }
+    private fun numList(): List<Channel> = ordered().filter { !isHiddenChannel(it) }
 
     private fun searchIn(all: List<Channel>): List<Channel> {
         val q = query.trim()
@@ -2203,10 +2295,13 @@ class MainActivity : Activity() {
     /** Список для ↑/↓, каждый раз собирается заново: всегда совпадает с тем, что видно в панели (сортировка, избранное, свой порядок). */
     private fun zapList(): List<Channel> {
         val g = zapGrp ?: return emptyList()
-        return when (g) {
-            G_ALL -> emptyList()
-            G_FAV -> ordered().filter { isFav(it) }
-            G_HIST, G_FIND -> zapSnap
+        val sk = srcSel(g)
+        return when {
+            g == G_ALL -> emptyList()
+            g == G_FAV -> ordered().filter { isFav(it) }
+            g == G_HIST || g == G_FIND -> zapSnap
+            sk != null -> ordered().filter { it.src == sk && (srcGrp(g).isEmpty() || it.group == srcGrp(g)) }
+            g in categories.names() -> ordered().filter { categories.contains(g, it.okey) }
             else -> ordered().filter { it.group == g }
         }
     }
@@ -2219,8 +2314,10 @@ class MainActivity : Activity() {
         lastStepAt = t
         val all = ordered()
         var l = if (zapByList()) zapList() else emptyList()
-        if (l.isEmpty()) l = numList()
-        if (l.isEmpty()) l = all
+        // своя группа или группа источника: не уходим в общий список, даже если канал в ней один
+        val insideGroup = zapGrp?.let { srcSel(it) != null || it in categories.names() } == true
+        if (l.isEmpty() && !insideGroup) l = numList()
+        if (l.isEmpty() && !insideGroup) l = all
         if (l.isEmpty()) return
         val i = l.indexOfFirst { it === cur }
         val n: Channel
@@ -2272,37 +2369,114 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Добавляет текущий адрес в список плейлистов, не заменяя уже сохранённые. */
-    /** Диалог «＋ Добавить плейлист»: название, ссылка или локальный файл. Файл сразу становится текущим источником. */
-    private fun showAddPlaylistDialog() {
-        val name = EditText(this).apply { hint = L.t("Название плейлиста") }
-        val url = EditText(this).apply { hint = L.t("Ссылка на M3U (необязательно)") }
-        val pick = tvButton(L.t("Выбрать локальный файл…")).apply {
-            setOnClickListener {
-                pendingLocalPlaylistName = name.text.toString().trim()
-                pendingLocalPlaylistKey = "local:" + System.currentTimeMillis().toString(36)
-                pickFile()
-            }
-        }
+    /** Подключённые источники: адреса плейлистов и «local:метка» через перевод строки. Старая настройка «pl» тоже подходит. */
+    private fun selectedList(): List<String> {
+        val s = (prefs.getString("selected_playlists", "") ?: "").trim()
+        val base = s.ifEmpty { prefs.getString("pl", "") ?: "" }
+        return Sources.parse(base)
+    }
+
+    /** Сохраняет набор источников и делает его текущим ([pl] — тот же список через перевод строки). */
+    private fun setSelected(list: List<String>) {
+        val clean = Sources.parse(list.joinToString("\n"))
+        val joined = clean.joinToString("\n")
+        prefs.edit().putString("selected_playlists", joined).putString("pl", joined)
+            .putString("srvn", clean.joinToString(", ") { sourceName(it) }).apply()
+        etPl.setText(joined)
+        tvSrv.text = srvLabel()
+    }
+
+    /** Подпись источника: имя из сохранённых плейлистов, «Локальный файл» или адрес сервера. */
+    private fun sourceName(key: String): String {
+        savedPlaylists().firstOrNull { it.pl == key }?.name?.takeIf { it.isNotBlank() }?.let { return it }
+        if (key == "local" || key.startsWith("local:")) return L.t("Локальный файл")
+        return Iptv.hostOf(key)
+    }
+
+    /** Добавляет источник к уже подключённым. false — уже есть или достигнут лимит. */
+    private fun addSource(key: String): Boolean {
+        val cur = selectedList()
+        if (key in cur) { toast(L.t("Этот плейлист уже добавлен")); return false }
+        if (cur.size >= MAX_SOURCES) { toast(L.t("Можно добавить не больше 10 источников")); return false }
+        setSelected(Sources.add(cur, key) ?: return false)
+        return true
+    }
+
+    /** «Выбрать из файла (M3U)»: системный выбор файла, затем файл копируется в память приложения. */
+    private fun pickLocalPlaylist() {
+        pendingLocalPlaylistName = ""
+        pendingLocalPlaylistKey = "local:" + System.currentTimeMillis().toString(36)
+        pickFile()
+    }
+
+    /** «Ссылка на плейлист»: до 10 ссылок в одном окне. */
+    private fun showUrlsDialog() {
+        val rows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val scroll = ScrollView(this).apply { isFocusable = false; addView(rows) }
+        val add = tvButton(L.t("＋ Добавить ещё"))
         val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0)
-            addView(name); addView(url); addView(pick)
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+            addView(scroll, LinearLayout.LayoutParams(-1, dp(260)))
+            addView(add, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
         }
-        addPlaylistDlg = android.app.AlertDialog.Builder(this).setTitle(L.t("Добавить плейлист")).setView(box)
-            .setNegativeButton(L.t("Закрыть"), null)
-            .setPositiveButton(L.t("Сохранить ссылку"), null)
-            .create().also { d ->
-                d.setOnShowListener {
-                    d.getButton(-1).setOnClickListener {
-                        val address = url.text.toString().trim()
-                        if (address.isEmpty()) { toast(L.t("Введите ссылку или выберите локальный файл")); return@setOnClickListener }
-                        val title = name.text.toString().trim().ifEmpty { Iptv.hostOf(address) }
-                        savePlaylist(title, address, "")
-                        toast(L.t("Плейлист добавлен")); d.dismiss()
-                    }
-                }
-                d.show()
+        val localKeys = selectedList().filter { it == "local" || it.startsWith("local:") }
+        val maxUrls = (MAX_SOURCES - localKeys.size).coerceAtLeast(1)
+        lateinit var refresh: () -> Unit
+        fun addRow(text: String) {
+            val ed = EditText(this).apply { setText(text); hint = "http://…/playlist.m3u"; setSingleLine() }
+            val del = tvButton("✕")
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(ed, LinearLayout.LayoutParams(0, -2, 1f))
+                addView(del, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(8) })
             }
+            del.setOnClickListener { rows.removeView(row); refresh() }
+            rows.addView(row)
+            refresh()
+        }
+        refresh = { add.visibility = if (rows.childCount >= maxUrls) View.GONE else View.VISIBLE }
+        selectedList().filter { it !in localKeys }.ifEmpty { listOf("") }.take(maxUrls).forEach { addRow(it) }
+        add.setOnClickListener { if (rows.childCount < maxUrls) addRow("") }
+        android.app.AlertDialog.Builder(this)
+            .setTitle(L.t("Ссылки на плейлисты (до 10)"))
+            .setView(box)
+            .setNegativeButton(L.t("Отмена"), null)
+            .setPositiveButton(L.t("Сохранить и загрузить")) { _, _ ->
+                val urls = (0 until rows.childCount).mapNotNull { i ->
+                    ((rows.getChildAt(i) as LinearLayout).getChildAt(0) as EditText).text.toString().trim()
+                }.filter { it.isNotEmpty() }.distinct()
+                if (urls.isEmpty() && localKeys.isEmpty()) { toast(L.t("Введите ссылку на плейлист")); return@setPositiveButton }
+                val known = savedPlaylists().map { it.pl }.toHashSet()
+                urls.forEach { if (it !in known) savePlaylist(Iptv.hostOf(it), it, "") }
+                setSelected(urls + localKeys)
+                closePanels()
+                loadAll(false)
+            }.show()
+    }
+
+    /** «Выбрать из списка серверов»: подсказка про файл и переход к выбору. */
+    private fun showServersDialog() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle(L.t("Список серверов"))
+            .setMessage(L.t("Создайте файл server_IPTV.txt со строками «Название | ссылка | адрес программы» и откройте его здесь. Старый servers.txt тоже подходит."))
+            .setPositiveButton(L.t("Открыть server_IPTV.txt")) { _, _ -> pickServerFile() }
+            .setNeutralButton(L.t("Сохранённые серверы")) { _, _ -> openServers() }
+            .setNegativeButton(L.t("Закрыть"), null)
+            .show()
+    }
+
+    /** Системный выбор файла со списком серверов. */
+    private fun pickServerFile() {
+        try {
+            val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            i.addCategory(Intent.CATEGORY_OPENABLE)
+            i.type = "*/*"
+            if (!canHandle(i)) throw IOException(L.t("нет окна выбора файлов"))
+            startActivityForResult(i, RC_SERVERS)
+        } catch (e: Exception) {
+            toast(L.t("Нет выбора файлов. Положите server_IPTV.txt в ") + getExternalFilesDir(null)?.absolutePath)
+        }
     }
 
     private fun savePlaylist(name: String, pl: String, epg: String) {
@@ -2358,10 +2532,15 @@ class MainActivity : Activity() {
             .show()
     }
 
-    private fun openServers() {
-        val l = (repo.servers() + savedPlaylists()).distinctBy { it.pl }
-        if (l.isEmpty()) { toast(L.t("Список серверов пуст. Выберите «Выбрать сервер» → «＋ Добавить плейлист» и выберите файл")); openSetup(); return }
-        val selected = l.map { it.pl in selectedPlaylists() }.toBooleanArray()
+    /** Список серверов: [extra] — только что прочитанный файл server_IPTV.txt, если он ещё не сохранён. */
+    private fun openServers(extra: List<Server> = emptyList()) {
+        val l = (extra + repo.servers() + savedPlaylists()).distinctBy { it.pl }
+        if (l.isEmpty()) {
+            toast(L.t("Список серверов пуст. Создайте server_IPTV.txt и откройте его"))
+            showServersDialog()
+            return
+        }
+        val selected = l.map { it.pl in selectedList() }.toBooleanArray()
         android.app.AlertDialog.Builder(this)
             .setTitle(L.t("Выберите плейлисты"))
             .setMultiChoiceItems(l.map { it.name }.toTypedArray(), selected) { _, which, checked -> selected[which] = checked }
@@ -2369,9 +2548,9 @@ class MainActivity : Activity() {
             .setPositiveButton(L.t("Загрузить")) { _, _ ->
                 val chosen = l.filterIndexed { i, _ -> selected[i] }
                 if (chosen.isNotEmpty()) {
-                    val urls = chosen.joinToString("\n") { it.pl }
-                    prefs.edit().putString("selected_playlists", urls).putString("pl", urls).putString("srvn", chosen.joinToString(", ") { it.name }).apply()
-                    etPl.setText(urls)
+                    if (chosen.size > MAX_SOURCES) toast(L.t("Можно добавить не больше 10 источников"))
+                    setSelected(chosen.map { it.pl })
+                    closePanels()
                     loadAll(false, announce = false)
                 }
             }.show()
@@ -2387,9 +2566,6 @@ class MainActivity : Activity() {
         */
     }
 
-    private fun selectedPlaylists(): Set<String> =
-        (prefs.getString("selected_playlists", "") ?: "").split("\n").filter { it.isNotBlank() }.toSet()
-
     private fun pickFile() {
         try {
             val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
@@ -2398,9 +2574,8 @@ class MainActivity : Activity() {
             if (!canHandle(i)) throw IOException(L.t("нет окна выбора файлов"))
             startActivityForResult(i, 7)
         } catch (e: Exception) {
-            toast(L.t("Нет выбора файлов. Положите servers.txt в ") + getExternalFilesDir(null)?.absolutePath)
-        }
-    }
+            toast(L.t("Нет выбора файлов. Положите плейлист в ") + getExternalFilesDir(null)?.absolutePath)
+        }    }
 
     /* ---------- резервная копия настроек ---------- */
     private fun appVersion(): String = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "?" } catch (e: Exception) { "?" }
@@ -2647,23 +2822,38 @@ class MainActivity : Activity() {
                     val bytes = (contentResolver.openInputStream(u) ?: throw IOException(L.t("нет доступа к файлу")))
                         .use { Iptv.readLimited(it, Iptv.MAX_PLAYLIST) }
                     val t = Iptv.text(bytes)
-                    val isPlaylist = repo.importText(t, pendingLocalPlaylistKey.ifEmpty { "local" })
-                    val localName = pendingLocalPlaylistName
-                    val localKey = pendingLocalPlaylistKey
+                    val key = pendingLocalPlaylistKey.ifEmpty { "local" }
                     pendingLocalPlaylistName = ""; pendingLocalPlaylistKey = ""
+                    val isPlaylist = repo.importText(t, key)
+                    val servers = if (isPlaylist) emptyList() else Iptv.parseServers(t)
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
-                        addPlaylistDlg?.dismiss(); addPlaylistDlg = null
                         if (isPlaylist) {
-                            if (localName.isNotEmpty()) savePlaylist(localName, localKey.ifEmpty { "local" }, "")
-                            toast(L.t("Плейлист добавлен"))
-                            closePanels(); loadAll(false)
+                            val file = u.lastPathSegment?.substringAfterLast(':')?.substringAfterLast('/')?.substringBeforeLast('.')
+                            savePlaylist(file?.takeIf { it.isNotBlank() } ?: L.t("Локальный файл"), key, "")
+                            if (addSource(key)) { toast(L.t("Плейлист добавлен")); closePanels(); loadAll(false) }
                         }
-                        else if (Iptv.parseServers(t).isEmpty()) toast(L.t("В файле нет адресов. Формат: Название | http://… | EPG"))
-                        else openServers()
+                        else if (servers.isEmpty()) toast(L.t("В файле нет адресов. Формат: Название | http://… | EPG"))
+                        else openServers(servers)
                     }
                 } catch (e: TooBigException) {
                     runOnUiThread { toast(L.f("Файл слишком большой (лимит {0} МБ)", Iptv.MAX_PLAYLIST / 1048576)) }
+                } catch (e: Exception) {
+                    runOnUiThread { toast(L.t("Не удалось прочитать файл")) }
+                }
+            }.start()
+        }
+        if (requestCode == RC_SERVERS && resultCode == RESULT_OK && u != null) {
+            Thread {
+                try {
+                    val bytes = (contentResolver.openInputStream(u) ?: throw IOException(L.t("нет доступа к файлу")))
+                        .use { Iptv.readLimited(it, Iptv.MAX_PLAYLIST) }
+                    val servers = Iptv.parseServers(Iptv.text(bytes))
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        if (servers.isEmpty()) toast(L.t("В файле нет адресов. Формат: Название | http://… | EPG"))
+                        else openServers(servers)
+                    }
                 } catch (e: Exception) {
                     runOnUiThread { toast(L.t("Не удалось прочитать файл")) }
                 }
@@ -2680,15 +2870,23 @@ class MainActivity : Activity() {
     private fun applyChannels(ch: List<Channel>, msg: String, quiet: Boolean = false) {
         chans = ch
         groups = ch.map { it.group }.distinct()
+        // источники для списка групп: только те, у которых есть каналы
+        val keys = ch.map { it.src }.filter { it.isNotEmpty() }.distinct()
+        sources = keys.map { k ->
+            val n = ch.firstOrNull { it.src == k }?.srcName?.takeIf { it.isNotBlank() } ?: sourceName(k)
+            Source(k, n)
+        }
+        multiSrc = sources.size > 1
+        if (!multiSrc) srcOpen.clear()
         val sm = prefs.getString("start", "fav")
         val lg = prefs.getString("lgrp", G_ALL) ?: G_ALL
         val startFav = sm == "fav" && ch.any { isFav(it) }
-        // выбранная группа (категория) сохраняется при обновлении списка, если она ещё существует
-        val keepGrp = grp != G_ALL && grp != G_FAV && grp != G_HIST && grp != G_FIND && (grp in groups || grp in categories.names())
+        // выбранная группа (категория или источник) сохраняется при обновлении списка, если она ещё существует
+        val keepGrp = grp != G_ALL && grp != G_FAV && grp != G_HIST && grp != G_FIND && validGroup(grp)
         if (!keepGrp || chans.isEmpty()) {
             grp = when {
                 startFav -> G_FAV
-                sm == "last" && (lg == G_FAV || lg == G_HIST || (lg in groups && lg !in hiddenGroups)) -> lg
+                sm == "last" && (lg == G_FAV || lg == G_HIST || lg == G_ALL || validGroup(lg)) -> lg
                 else -> G_ALL
             }
             zapGrp = if (startFav) G_FAV else null
@@ -2743,7 +2941,7 @@ class MainActivity : Activity() {
         // программа остаётся на экране, пока грузится плейлист; сбрасываем её только при переходе на другой плейлист
         if (pl != Session.pl) { epg = emptyMap(); Session.epg = emptyMap(); epgStatus = L.t("загрузка…") }
         if (announce) toast(L.t("Загрузка плейлиста…"))
-        val sources = (prefs.getString("selected_playlists", null) ?: pl).split("\n").map { it.trim() }
+        val srcKeys = (prefs.getString("selected_playlists", null) ?: pl).split("\n").map { it.trim() }
             .filter { it.isNotEmpty() }.ifEmpty { listOf(pl) }
         val haveChannels = chans.isNotEmpty()   // список уже на экране — кэш не подставляем
         Thread {
@@ -2751,10 +2949,12 @@ class MainActivity : Activity() {
                 // 1. Копия плейлиста с прошлого раза: показываем сразу, не дожидаясь сети
                 var cachedChannels: List<Channel> = emptyList()
                 if (!force && !haveChannels) {
-                    val cached = sources.mapNotNull { repo.loadCachedPlaylist(it) }
+                    val cached = srcKeys.mapNotNull { k -> repo.loadCachedPlaylist(k)?.let { k to it } }
                     if (cached.isNotEmpty()) {
-                        cachedChannels = cached.flatMap { it.list.ch }.mapIndexed { i, c -> c.apply { okey = "$name#$i" } }
-                        val cachedEpgUrl = cached.map { it.list.epgUrl }.firstOrNull { it.isNotEmpty() } ?: ""
+                        cachedChannels = cached.flatMap { (k, ld) ->
+                            ld.list.ch.map { c -> c.apply { src = k; srcName = sourceName(k) } }
+                        }.mapIndexed { i, c -> c.apply { okey = "$name#$i" } }
+                        val cachedEpgUrl = cached.map { it.second.list.epgUrl }.firstOrNull { it.isNotEmpty() } ?: ""
                         runOnUiThread {
                             if (gen != loadGen || isFinishing || isDestroyed || chans.isNotEmpty()) return@runOnUiThread
                             applyChannels(cachedChannels, "", quiet = true)
@@ -2765,11 +2965,18 @@ class MainActivity : Activity() {
                     }
                 }
 
-                // 2. Свежий плейлист с сервера
-                val loaded = sources.map { repo.loadPlaylist(it) }
-                val channels = loaded.flatMap { it.list.ch }.mapIndexed { i, c -> c.apply { okey = "$name#$i" } }
-                val epgUrl = loaded.map { it.list.epgUrl }.firstOrNull { it.isNotEmpty() } ?: ""
-                val fromCache = loaded.any { it.fromCache }
+                // 2. Свежий плейлист с сервера (недоступный источник пропускаем, остальные показываем)
+                val loaded = srcKeys.mapNotNull { k ->
+                    try { k to repo.loadPlaylist(k) }
+                    catch (e: Exception) { Log.w("Noxis", L.f("источник {0}: {1}", k, Iptv.safeMsg(e))); null }
+                }
+                if (loaded.isEmpty()) throw IOException(L.t("не удалось загрузить плейлисты"))
+                val channels = loaded.flatMap { (k, ld) ->
+                    ld.list.ch.map { c -> c.apply { src = k; srcName = sourceName(k) } }
+                }.mapIndexed { i, c -> c.apply { okey = "$name#$i" } }
+                val epgUrl = loaded.map { it.second.list.epgUrl }.firstOrNull { it.isNotEmpty() } ?: ""
+                val fromCache = loaded.any { it.second.fromCache }
+                val failed = srcKeys.size - loaded.size
                 if (gen != loadGen) return@Thread
                 // тот же список, что уже показан из кэша, — не перерисовываем его и не перезапускаем канал
                 val same = cachedChannels.isNotEmpty() && cachedChannels.size == channels.size &&
@@ -2783,7 +2990,7 @@ class MainActivity : Activity() {
                     !announce -> ""
                     fromCache -> L.f("Сервер недоступен — показан сохранённый список: {0}", channels.size)
                     else -> L.f("Каналов: {0}", channels.size)
-                }
+                } + if (failed > 0) L.f(" · не загружено источников: {0}", failed) else ""
                 runOnUiThread {
                     if (gen != loadGen || isFinishing || isDestroyed) return@runOnUiThread
                     applyChannels(channels, msg, quiet = cachedChannels.isNotEmpty())

@@ -29,4 +29,4 @@ keys-backup/
 noxis-settings*.json
 
 # Локально собранные APK (не публикуем: публикация только через Actions)
-releases/
+releases/server_IPTV.txt

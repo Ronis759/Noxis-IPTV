@@ -26,7 +26,9 @@ object UiScale { @Volatile var f = 1f }
  */
 class Row(
     val title: String, val sub: String = "", val tag: Any? = null, val dim: Boolean = false, val icon: String = "", val short: String = "",
-    val prog: Float = -1f, val mark: String = "", val date: String = ""
+    val prog: Float = -1f, val mark: String = "", val date: String = "",
+    /** Ключ выбора: у источников и их групп заголовок отличается от ключа (например, «НТВ+ · Кино»). */
+    val key: String = title
 )
 
 class RowAdapter(private val ctx: Context) : BaseAdapter() {
@@ -78,7 +80,7 @@ class RowAdapter(private val ctx: Context) : BaseAdapter() {
             text = if (comp) r.short.ifEmpty { shownTitle.take(1).uppercase() } else shownTitle
             textSize = if (comp) 24f else 20f * UiScale.f
             gravity = if (comp) Gravity.CENTER_HORIZONTAL else Gravity.START
-            setTextColor(if (r.title == active && active.isNotEmpty()) Theme.accent else if (r.dim) Theme.gray else Color.WHITE)
+            setTextColor(if (r.key == active && active.isNotEmpty()) Theme.accent else if (r.dim) Theme.gray else Color.WHITE)
         }
         (tx.getChildAt(1) as TextView).apply {
             textSize = 16f * UiScale.f
