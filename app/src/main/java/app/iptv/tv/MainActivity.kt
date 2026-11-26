@@ -2457,23 +2457,25 @@ class MainActivity : Activity() {
 
     /** «Выбрать из списка серверов»: открыть файл, посмотреть сохранённые серверы или удалить файлы серверов. */
     private fun showServersDialog() {
-        val items = arrayOf(
-            L.t("Открыть server_IPTV.txt"),
-            L.t("Сохранённые серверы"),
-            L.t("Удалить сохранённые файлы серверов"),
-            L.t("Закрыть")
-        )
-        android.app.AlertDialog.Builder(this)
-            .setTitle(L.t("Список серверов"))
-            .setMessage(L.t("Файл: по строке «Название | ссылка | адрес программы». Подходит server_IPTV.txt и старый servers.txt."))
-            .setItems(items) { _, w ->
-                when (w) {
-                    0 -> pickServerFile()
-                    1 -> openServers()
-                    2 -> confirmDeleteServerFiles()
-                    else -> {}
-                }
-            }.show()
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(4), dp(20), 0)
+            addView(TextView(this@MainActivity).apply {
+                text = L.t("Файл: по строке «Название | ссылка | адрес программы». Подходит server_IPTV.txt и старый servers.txt.")
+                textSize = 14f
+                setTextColor(Theme.gray)
+                setPadding(dp(2), 0, dp(2), dp(6))
+            })
+            addView(tvButton(L.t("Открыть server_IPTV.txt")))
+            addView(tvButton(L.t("Сохранённые серверы")))
+            addView(tvButton(L.t("Удалить сохранённые файлы серверов")))
+            addView(tvButton(L.t("Закрыть")))
+        }
+        val d = android.app.AlertDialog.Builder(this).setTitle(L.t("Список серверов")).setView(box).create()
+        val acts = listOf<() -> Unit>({ d.dismiss(); pickServerFile() }, { d.dismiss(); openServers() }, { d.dismiss(); confirmDeleteServerFiles() }, { d.dismiss() })
+        for (i in acts.indices) (box.getChildAt(i + 1) as Button).setOnClickListener { acts[i]() }
+        d.show()
+        box.getChildAt(1).requestFocus()
     }
 
     /** Файлы серверов в памяти приложения: server_IPTV.txt (новое имя) и servers.txt (старое). */
