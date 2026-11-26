@@ -2581,20 +2581,7 @@ class MainActivity : Activity() {
             showServersDialog()
             return
         }
-        val selected = l.map { it.pl in selectedList() }.toBooleanArray()
-        android.app.AlertDialog.Builder(this)
-            .setTitle(L.t("Выберите плейлисты"))
-            .setMultiChoiceItems(l.map { it.name }.toTypedArray(), selected) { _, which, checked -> selected[which] = checked }
-            .setNegativeButton(L.t("Отмена"), null)
-            .setPositiveButton(L.t("Загрузить")) { _, _ ->
-                val chosen = l.filterIndexed { i, _ -> selected[i] }
-                if (chosen.isNotEmpty()) {
-                    if (chosen.size > MAX_SOURCES) toast(L.t("Можно добавить не больше 10 источников"))
-                    setSelected(chosen.map { it.pl })
-                    closePanels()
-                    loadAll(false, announce = false)
-                }
-            }.show()
+        showServerChooser(l)
         return
         /*
         srvBackToSetup = setup.visibility == View.VISIBLE
@@ -2605,6 +2592,44 @@ class MainActivity : Activity() {
         srvList.setSelection(l.indexOfFirst { it.name == act }.coerceAtLeast(0))
         srvList.requestFocus()
         */
+    }
+
+    /** Список сохранённых серверов: отметки кнопками (системный список есть не на всех ТВ). */
+    private fun showServerChooser(l: List<Server>) {
+        val chosen = l.map { it.pl in selectedList() }.toBooleanArray()
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(6), dp(20), 0) }
+        val rows = ArrayList<Button>()
+        fun label(b: Button, i: Int) {
+            b.text = (if (chosen[i]) "[✓]  " else "[  ]  ") + l[i].name + "   ·   " + Iptv.hostOf(l[i].pl)
+        }
+        for (i in l.indices) {
+            val b = tvButton("")
+            label(b, i)
+            b.setOnClickListener { chosen[i] = !chosen[i]; label(b, i) }
+            rows.add(b); box.addView(b)
+        }
+        val scroll = ScrollView(this).apply { isFocusable = false; addView(box) }
+        val load = tvButton(L.t("Загрузить"))
+        val cancel = tvButton(L.t("Отмена"))
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(scroll, LinearLayout.LayoutParams(-1, dp(320)))
+            addView(load); addView(cancel)
+        }
+        val d = android.app.AlertDialog.Builder(this).setTitle(L.t("Выберите плейлисты")).setView(root).create()
+        load.setOnClickListener {
+            val sel = l.filterIndexed { i, _ -> chosen[i] }
+            d.dismiss()
+            if (sel.isNotEmpty()) {
+                if (sel.size > MAX_SOURCES) toast(L.t("Можно добавить не больше 10 источников"))
+                setSelected(sel.map { it.pl })
+                closePanels()
+                loadAll(false, announce = false)
+            }
+        }
+        cancel.setOnClickListener { d.dismiss() }
+        d.show()
+        rows.firstOrNull()?.requestFocus()
     }
 
     private fun pickFile() {
@@ -2889,7 +2914,10 @@ class MainActivity : Activity() {
                 try {
                     val bytes = (contentResolver.openInputStream(u) ?: throw IOException(L.t("нет доступа к файлу")))
                         .use { Iptv.readLimited(it, Iptv.MAX_PLAYLIST) }
-                    val servers = Iptv.parseServers(Iptv.text(bytes))
+                    val t = Iptv.text(bytes)
+                    val servers = Iptv.parseServers(t)
+                    // сохраняем прочитанный файл: иначе «Сохранённые серверы» остаётся пустым
+                    if (servers.isNotEmpty()) repo.importText(t)
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         if (servers.isEmpty()) toast(L.t("В файле нет адресов. Формат: Название | http://… | EPG"))
