@@ -2455,15 +2455,54 @@ class MainActivity : Activity() {
             }.show()
     }
 
-    /** «Выбрать из списка серверов»: подсказка про файл и переход к выбору. */
+    /** «Выбрать из списка серверов»: открыть файл, посмотреть сохранённые серверы или удалить файлы серверов. */
     private fun showServersDialog() {
+        val items = arrayOf(
+            L.t("Открыть server_IPTV.txt"),
+            L.t("Сохранённые серверы"),
+            L.t("Удалить сохранённые файлы серверов"),
+            L.t("Закрыть")
+        )
         android.app.AlertDialog.Builder(this)
             .setTitle(L.t("Список серверов"))
-            .setMessage(L.t("Создайте файл server_IPTV.txt со строками «Название | ссылка | адрес программы» и откройте его здесь. Старый servers.txt тоже подходит."))
-            .setPositiveButton(L.t("Открыть server_IPTV.txt")) { _, _ -> pickServerFile() }
-            .setNeutralButton(L.t("Сохранённые серверы")) { _, _ -> openServers() }
-            .setNegativeButton(L.t("Закрыть"), null)
-            .show()
+            .setMessage(L.t("Файл: по строке «Название | ссылка | адрес программы». Подходит server_IPTV.txt и старый servers.txt."))
+            .setItems(items) { _, w ->
+                when (w) {
+                    0 -> pickServerFile()
+                    1 -> openServers()
+                    2 -> confirmDeleteServerFiles()
+                    else -> {}
+                }
+            }.show()
+    }
+
+    /** Файлы серверов в памяти приложения: server_IPTV.txt (новое имя) и servers.txt (старое). */
+    private fun serverFiles(): List<File> {
+        val l = ArrayList<File>()
+        for (d in listOfNotNull(filesDir, getExternalFilesDir(null))) {
+            for (n in listOf("server_IPTV.txt", "servers.txt")) {
+                val f = File(d, n)
+                if (f.exists()) l.add(f)
+            }
+        }
+        return l
+    }
+
+    /** Удаляет сохранённые файлы серверов. Подключённые сейчас плейлисты остаются. */
+    private fun confirmDeleteServerFiles() {
+        val files = serverFiles()
+        if (files.isEmpty()) { toast(L.t("Сохранённых файлов серверов нет")); return }
+        android.app.AlertDialog.Builder(this)
+            .setTitle(L.t("Удалить файлы серверов?"))
+            .setMessage(L.t("Будут удалены server_IPTV.txt и servers.txt из памяти приложения. Подключённые сейчас плейлисты останутся."))
+            .setNegativeButton(L.t("Отмена"), null)
+            .setPositiveButton(L.t("Удалить")) { _, _ ->
+                var n = 0
+                for (f in files) try { if (f.delete()) n++ } catch (e: Exception) { }
+                if (n == 0) toast(L.t("Не удалось удалить файлы серверов"))
+                else toast(L.f("Файлов серверов удалено: {0}", n))
+                if (::tvSrv.isInitialized) tvSrv.text = srvLabel()
+            }.show()
     }
 
     /** Системный выбор файла со списком серверов. */
