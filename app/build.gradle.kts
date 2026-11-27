@@ -15,9 +15,9 @@ android {
         applicationId = "app.iptv.tv"
         minSdk = 21
         targetSdk = 35
-        // В GitHub Actions versionCode растёт с каждым запуском, локально = 73
-        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 73
-        versionName = "2.9.9"
+        // В GitHub Actions versionCode растёт с каждым запуском, локально = 74
+        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 74
+        versionName = "2.9.10"
         // Автообновление имеет смысл только у сборки, подписанной постоянным ключом (иначе Android не установит новую версию поверх)
         buildConfigField("boolean", "UPDATES_ENABLED", hasReleaseKey.toString())
     }

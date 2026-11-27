@@ -935,7 +935,11 @@ class MainActivity : Activity() {
                 else -> L.t("В группе нет каналов")
             })
             (if (g == G_FAV) railFav else railGrp).requestFocus()
-        } else chList.requestFocus()
+        } else {
+            // при открытии группы выделение — на первом канале списка
+            chList.setSelection(0)
+            chList.requestFocus()
+        }
     }
 
     /** Показ или скрытие группы изменилось: обновляем список групп, каналы и значки. */
@@ -3193,6 +3197,8 @@ class MainActivity : Activity() {
                     }
                 }
             }
+            // ↑ на первом канале: не уводим фокус на левую полосу (настройки) — ничего не делаем
+            if (chList.hasFocus() && k == KeyEvent.KEYCODE_DPAD_UP && chList.selectedItemPosition <= 0) return true
             if (k == KeyEvent.KEYCODE_BACK) {
                 if (setup.visibility == View.VISIBLE && chans.isEmpty()) return super.dispatchKeyEvent(e)
                 if (e.action == KeyEvent.ACTION_UP) {
