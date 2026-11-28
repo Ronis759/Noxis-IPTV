@@ -46,6 +46,8 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
@@ -307,7 +309,17 @@ class MainActivity : Activity() {
         val extractors = DefaultExtractorsFactory().setTsExtractorFlags(
             DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
         )
-        player = ExoPlayer.Builder(this)
+        // AC3/EAC3 декодируем программно через FFmpeg: системный декодер на части приставок
+        // молчит или отдаёт звук только в HDMI-passthrough. Остальные кодеки остаются аппаратными.
+        val codecs = MediaCodecSelector.DEFAULT
+        val selector = MediaCodecSelector { mime, secure, tunnel ->
+            if (mime == MimeTypes.AUDIO_AC3 || mime == MimeTypes.AUDIO_E_AC3) emptyList()
+            else codecs.getDecoderInfos(mime, secure, tunnel)
+        }
+        val renderers = DefaultRenderersFactory(this)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+            .setMediaCodecSelector(selector)
+        player = ExoPlayer.Builder(this, renderers)
             .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(this, httpFactory), extractors)).build()
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
@@ -2615,10 +2627,14 @@ class MainActivity : Activity() {
         val scroll = ScrollView(this).apply { isFocusable = false; addView(box) }
         val load = tvButton(L.t("Загрузить"))
         val cancel = tvButton(L.t("Отмена"))
+        val del = tvButton(L.t("Удалить плейлист…"))
+        val hasSaved = savedPlaylists().isNotEmpty()
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(scroll, LinearLayout.LayoutParams(-1, dp(320)))
-            addView(load); addView(cancel)
+            addView(scroll, LinearLayout.LayoutParams(-1, dp(if (hasSaved) 260 else 320)))
+            addView(load)
+            if (hasSaved) addView(del)
+            addView(cancel)
         }
         val d = android.app.AlertDialog.Builder(this).setTitle(L.t("Выберите плейлисты")).setView(root).create()
         load.setOnClickListener {
@@ -2632,8 +2648,65 @@ class MainActivity : Activity() {
             }
         }
         cancel.setOnClickListener { d.dismiss() }
+        del.setOnClickListener { d.dismiss(); showDeletePlaylistChooser() }
         d.show()
         rows.firstOrNull()?.requestFocus()
+    }
+
+    /** Удаление сохранённых ссылок на плейлисты. Записи из файлов серверов не трогаем. */
+    private fun showDeletePlaylistChooser() {
+        val l = savedPlaylists()
+        if (l.isEmpty()) { toast(L.t("Сохранённых ссылок нет")); return }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(6), dp(20), 0) }
+        val rows = ArrayList<Button>()
+        lateinit var dlg: android.app.AlertDialog
+        for (s in l) {
+            val b = tvButton(s.name + "   ·   " + Iptv.hostOf(s.pl))
+            b.setOnClickListener { dlg.dismiss(); confirmDeletePlaylist(s) }
+            rows.add(b); box.addView(b)
+        }
+        val back = tvButton(L.t("Назад"))
+        val scroll = ScrollView(this).apply { isFocusable = false; addView(box) }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(scroll, LinearLayout.LayoutParams(-1, dp(320)))
+            addView(back)
+        }
+        dlg = android.app.AlertDialog.Builder(this).setTitle(L.t("Удалить плейлист")).setView(root).create()
+        back.setOnClickListener { dlg.dismiss(); openServers() }
+        dlg.show()
+        rows.firstOrNull()?.requestFocus()
+    }
+
+    private fun confirmDeletePlaylist(s: Server) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle(L.t("Удалить плейлист?"))
+            .setMessage(L.f("Плейлист «{0}» будет удалён из сохранённых. Если он подключён, каналы этого источника исчезнут.", s.name))
+            .setNegativeButton(L.t("Отмена"), null)
+            .setPositiveButton(L.t("Удалить")) { _, _ -> deletePlaylist(s) }
+            .show()
+    }
+
+    /** Убирает ссылку из saved_playlists, её кэш и (если подключён) из источников. */
+    private fun deletePlaylist(s: Server) {
+        val old = prefs.getString("saved_playlists", "") ?: ""
+        prefs.edit().putString("saved_playlists", Sources.removeSaved(old, s.pl)).apply()
+        try { Repository.playlistFile(filesDir, s.pl).delete() } catch (e: Exception) { }
+        if (s.pl !in selectedList()) {
+            toast(L.f("Плейлист удалён: {0}", s.name))
+            openServers()
+            return
+        }
+        val left = selectedList().filter { it != s.pl }
+        setSelected(left)
+        closePanels()
+        if (left.isEmpty()) {
+            toast(L.t("Плейлист удалён. Добавьте новый источник"))
+            openSetup()
+        } else {
+            toast(L.f("Плейлист удалён: {0}", s.name))
+            loadAll(false, announce = false)
+        }
     }
 
     private fun pickFile() {

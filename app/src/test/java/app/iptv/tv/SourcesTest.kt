@@ -34,4 +34,14 @@ class SourcesTest {
         val t = (1..15).joinToString("\n") { "s$it" }
         assertEquals(10, Sources.parse(t).size)
     }
+
+    @Test fun removeSaved_drops_only_matching_link() {
+        val saved = "Дом\thttps://a/p.m3u\thttp://epg\nРабота\thttps://b/p.m3u\t"
+        assertEquals("Дом\thttps://a/p.m3u\thttp://epg", Sources.removeSaved(saved, "https://b/p.m3u"))
+    }
+
+    @Test fun removeSaved_keeps_other_links() {
+        val saved = "Дом\thttps://a/p.m3u\t"
+        assertEquals(saved, Sources.removeSaved(saved, "https://zzz/p.m3u"))
+    }
 }

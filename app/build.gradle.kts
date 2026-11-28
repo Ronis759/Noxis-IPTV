@@ -15,9 +15,9 @@ android {
         applicationId = "app.iptv.tv"
         minSdk = 21
         targetSdk = 35
-        // В GitHub Actions versionCode растёт с каждым запуском, локально = 74
-        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 74
-        versionName = "2.9.10"
+        // В GitHub Actions versionCode растёт с каждым запуском, локально = 75
+        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 75
+        versionName = "2.9.11"
         // Автообновление имеет смысл только у сборки, подписанной постоянным ключом (иначе Android не установит новую версию поверх)
         buildConfigField("boolean", "UPDATES_ENABLED", hasReleaseKey.toString())
     }
@@ -58,6 +58,8 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:1.8.0")
     implementation("androidx.media3:media3-exoplayer-rtsp:1.8.0")
     implementation("androidx.media3:media3-ui:1.8.0")
+    // Программный декодер AC3/EAC3 (FFmpeg) для Media3 1.8.0: системный на части приставок не даёт звук
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.8.0+1")
     testImplementation("junit:junit:4.13.2")
     // kxml2 — тот же разборщик XML, что android.util.Xml подставляет на устройстве: разбор XMLTV проверяется в обычном JVM-тесте
     testImplementation("net.sf.kxml:kxml2:2.3.0")

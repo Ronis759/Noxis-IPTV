@@ -18,4 +18,12 @@ object Sources {
         if (k.isEmpty() || k in list || list.size >= max) return null
         return list + k
     }
+
+    /**
+     * Убирает из сохранённого списка (`saved_playlists`, строки «имя\tадрес\tepg») записи с адресом [pl].
+     * Остальные строки остаются как были; пустые строки отбрасываются.
+     */
+    fun removeSaved(saved: String, pl: String): String =
+        saved.split("\n").filter { it.isNotEmpty() && it.split("\t").getOrNull(1)?.trim() != pl }
+            .joinToString("\n")
 }
