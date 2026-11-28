@@ -382,13 +382,7 @@ object En {
         "не удалось загрузить плейлисты" to "failed to load playlists",
         "каналов: {0}" to "channels: {0}",
         "пользовательская" to "custom",
-        "Удалить сохранённые файлы серверов" to "Delete saved server files",
-        "Сохранённых файлов серверов нет" to "No saved server files",
         "Файл: по строке «Название | ссылка | адрес программы». Подходит server_IPTV.txt и старый servers.txt." to "File: one line per server - Name | link | guide address. server_IPTV.txt and the old servers.txt both work.",
-        "Будут удалены server_IPTV.txt и servers.txt из памяти приложения. Подключённые сейчас плейлисты останутся." to "server_IPTV.txt and servers.txt will be deleted from the app storage. Currently connected playlists will stay.",
-        "Удалить файлы серверов?" to "Delete server files?",
-        "Не удалось удалить файлы серверов" to "Could not delete the server files",
-        "Файлов серверов удалено: {0}" to "Server files deleted: {0}",
         "Удалить" to "Delete",
     )
 }
